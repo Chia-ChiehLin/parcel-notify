@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>大樓包裹通知（警衛）</title>
+  <style>
+    body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial; padding: 24px; }
+    .card { max-width: 520px; border: 1px solid #ddd; border-radius: 8px; padding: 20px; }
+    label { display:block; margin-top:12px; font-weight:600; }
+    select, input[type="number"], input[type="text"] { width:100%; padding:8px; margin-top:6px; box-sizing:border-box; }
+    button { margin-top:16px; padding:10px 14px; cursor:pointer; }
+    #status { margin-top:16px; font-weight:700; }
+    .ok { color: #137333; }
+    .err { color: #b00020; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>包裹通知發送</h2>
+    <div>
+      <label>住戶門牌</label>
+      <select id="apartment">
+        <option value="">-- 請選擇住戶 --</option>
+      </select>
+
+      <label>包裹數量（選填）</label>
+      <input id="count" type="number" min="1" placeholder="例如 2" />
+
+      <label>附加訊息（選填）</label>
+      <input id="note" type="text" placeholder="如：需冷藏／大型包裹／急件等" />
+
+      <button id="sendBtn">發送通知</button>
+      <div id="status"></div>
+    </div>
+  </div>
+
+  <script>
+    const $apt = document.getElementById('apartment');
+    const $count = document.getElementById('count');
+    const $note = document.getElementById('note');
+    const $btn = document.getElementById('sendBtn');
+    const $status = document.getElementById('status');
+
+    async function loadApartments() {
+      try {
+        const res = await fetch('/api/apartments');
+        if (!res.ok) throw new Error('fetch apartments failed');
+        const data = await res.json();
+        for (const r of data) {
+          const opt = document.createElement('option');
+          opt.value = r.apartment_no;
+          opt.textContent = r.display_name;
+          $apt.appendChild(opt);
+        }
+      } catch (e) {
+        $status.textContent = '無法載入門牌清單（請稍後重試）';
+        $status.className = 'err';
+      }
+    }
+
+    async function send() {
+      const apartment = $apt.value.trim();
+      const count = $count.value ? Number($count.value) : null;
+      const note = $note.value.trim();
+
+      if (!apartment) {
+        $status.textContent = '請先選擇住戶門牌';
+        $status.className = 'err';
+        return;
+      }
+
+      $btn.disabled = true;
+      $status.textContent = '發送中…';
+      $status.className = '';
+
+      try {
+        const res = await fetch('/api/notify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ apartment, count, note })
+        });
+        const data = await res.json();
+        if (res.ok) {
+          $status.textContent = `已通知 ${apartment}（送達 ${data.results.filter(r => r.ok).length} 人）`;
+          $status.className = 'ok';
+          $count.value = '';
+          $note.value = '';
+        } else if (res.status === 207) {
+          $status.textContent = `部分成功：${apartment}（詳見主控台）`;
+          console.log('Partial results:', data.results);
+          $status.className = 'err';
+        } else {
+          $status.textContent = `通知失敗：${data.error || '未知錯誤'}`;
+          $status.className = 'err';
+        }
+      } catch (e) {
+        $status.textContent = '通知發送過程出錯';
+        $status.className = 'err';
+      } finally {
+        $btn.disabled = false;
+      }
+    }
+
+    $btn.addEventListener('click', send);
+    loadApartments();
+  </script>
+</body>
+</html>

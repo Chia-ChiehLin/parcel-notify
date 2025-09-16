@@ -1,0 +1,21 @@
+node_modules/
+npm-debug.log*
+yarn*.log
+pnpm-debug.log*
+dist/
+build/
+.tmp/
+coverage/
+
+# Local env & secrets
+.env
+.env.local
+.env.*.local
+
+# SQLite & local data
+data/
+*.db
+
+# OS/Editor
+.DS_Store
+.vscode/
