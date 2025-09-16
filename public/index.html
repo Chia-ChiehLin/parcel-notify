@@ -2,108 +2,227 @@
 <html lang="zh-Hant">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>大樓包裹通知（警衛）</title>
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1, maximum-scale=1"
+  />
+  <title>大樓包裹通知（管理端）</title>
   <style>
-    body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial; padding: 24px; }
-    .card { max-width: 520px; border: 1px solid #ddd; border-radius: 8px; padding: 20px; }
-    label { display:block; margin-top:12px; font-weight:600; }
-    select, input[type="number"], input[type="text"] { width:100%; padding:8px; margin-top:6px; box-sizing:border-box; }
-    button { margin-top:16px; padding:10px 14px; cursor:pointer; }
-    #status { margin-top:16px; font-weight:700; }
-    .ok { color: #137333; }
-    .err { color: #b00020; }
+    :root {
+      --bg: #0b0f13;
+      --card: #121822;
+      --muted: #93a1b1;
+      --text: #e8eef7;
+      --accent: #4f8cff;
+      --good: #24c08e;
+      --warn: #ffb02e;
+      --bad: #ff5c5c;
+      --border: #202a36;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--bg); color: var(--text);
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
+        Roboto, Oxygen, Ubuntu, Cantarell, "Helvetica Neue", Arial, "Noto Sans",
+        "Apple Color Emoji", "Segoe UI Emoji";
+    }
+    .wrap {
+      max-width: 920px; margin: 32px auto; padding: 0 16px;
+    }
+    h1 { font-size: 22px; font-weight: 700; margin: 0 0 16px; }
+    .card {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 16px; padding: 20px; box-shadow: 0 6px 20px rgba(0,0,0,.25);
+    }
+    label { display:block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+    input, select, textarea {
+      width: 100%; padding: 12px 14px; border-radius: 12px;
+      background: #0e141d; color: var(--text);
+      border: 1px solid var(--border); outline: none;
+    }
+    input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .mt { margin-top: 16px; }
+    .btnbar { display:flex; gap: 12px; align-items:center; }
+    button {
+      cursor: pointer; border: 0; padding: 12px 18px;
+      border-radius: 12px; font-weight: 700;
+      background: var(--accent); color: white;
+    }
+    .btn-ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
+    .hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
+    .status {
+      margin-top: 16px; padding: 12px 14px; border-radius: 12px;
+      background: #0e141d; border: 1px solid var(--border); font-size: 14px;
+      white-space: pre-wrap;
+    }
+    .ok { border-color: rgba(36,192,142,.6); }
+    .partial { border-color: rgba(255,176,46,.6); }
+    .bad { border-color: rgba(255,92,92,.6); }
+    .badge { display:inline-block; padding: 4px 10px; border-radius: 999px; font-size: 12px; }
+    .badge-ok { background: rgba(36,192,142,.15); color: var(--good); }
+    .badge-partial { background: rgba(255,176,46,.15); color: var(--warn); }
+    .badge-bad { background: rgba(255,92,92,.15); color: var(--bad); }
+    .cap { font-variant-numeric: tabular-nums; }
   </style>
 </head>
 <body>
-  <div class="card">
-    <h2>包裹通知發送</h2>
-    <div>
-      <label>住戶門牌</label>
-      <select id="apartment">
-        <option value="">-- 請選擇住戶 --</option>
-      </select>
+  <div class="wrap">
+    <h1>📦 大樓包裹通知（管理端）</h1>
 
-      <label>包裹數量（選填）</label>
-      <input id="count" type="number" min="1" placeholder="例如 2" />
+    <div class="card">
+      <div class="row">
+        <div>
+          <label for="apt">選擇門牌</label>
+          <select id="apt"></select>
+          <div class="hint">資料來自資料庫（seed.sql 已建立 A/B 棟、1–16 樓、每層 4 戶）。</div>
+        </div>
+        <div>
+          <label for="count">件數（可空白）</label>
+          <div class="btnbar">
+            <input id="count" type="number" min="0" placeholder="例如：1">
+            <button class="btn-ghost" data-q="1">+1</button>
+            <button class="btn-ghost" data-q="2">+2</button>
+            <button class="btn-ghost" data-q="3">+3</button>
+            <button class="btn-ghost" data-q="0">清空</button>
+          </div>
+        </div>
+      </div>
 
-      <label>附加訊息（選填）</label>
-      <input id="note" type="text" placeholder="如：需冷藏／大型包裹／急件等" />
+      <div class="mt">
+        <label for="note">備註（可空白）</label>
+        <textarea id="note" rows="3" placeholder="例如：易碎、冷凍、掛號、請先到櫃臺簽收…"></textarea>
+      </div>
 
-      <button id="sendBtn">發送通知</button>
-      <div id="status"></div>
+      <div class="btnbar mt">
+        <button id="send">送出通知</button>
+        <button id="refresh" class="btn-ghost">重新載入門牌清單</button>
+      </div>
+
+      <div id="status" class="status" style="display:none"></div>
     </div>
+
+    <p class="hint mt">
+      本頁面已由 Basic Auth 保護。帳密來自伺服器環境變數
+      <code>ADMIN_USER / ADMIN_PASS</code>。
+    </p>
   </div>
 
   <script>
-    const $apt = document.getElementById('apartment');
-    const $count = document.getElementById('count');
-    const $note = document.getElementById('note');
-    const $btn = document.getElementById('sendBtn');
-    const $status = document.getElementById('status');
+    const ddl = document.querySelector('#apt');
+    const countEl = document.querySelector('#count');
+    const noteEl = document.querySelector('#note');
+    const statusEl = document.querySelector('#status');
+    const btnSend = document.querySelector('#send');
+    const btnRefresh = document.querySelector('#refresh');
 
-    async function loadApartments() {
+    function showStatus(kind, msg) {
+      statusEl.className = 'status ' + (kind || '');
+      statusEl.style.display = 'block';
+      statusEl.innerHTML = msg;
+    }
+    function clearStatus() {
+      statusEl.style.display = 'none';
+      statusEl.textContent = '';
+      statusEl.className = 'status';
+    }
+
+    async function loadApts() {
+      clearStatus();
+      ddl.innerHTML = '<option value="">載入中…</option>';
       try {
-        const res = await fetch('/api/apartments');
-        if (!res.ok) throw new Error('fetch apartments failed');
-        const data = await res.json();
-        for (const r of data) {
+        const res = await fetch('/api/apartments', { credentials: 'same-origin' });
+        if (!res.ok) throw new Error('載入失敗：' + res.status);
+        const list = await res.json();
+        ddl.innerHTML = '';
+        // 加個常用快速前綴 A-14-1
+        const pref = 'A-14-1';
+        let hasPref = false;
+
+        for (const r of list) {
           const opt = document.createElement('option');
           opt.value = r.apartment_no;
-          opt.textContent = r.display_name;
-          $apt.appendChild(opt);
+          opt.textContent = r.display_name || r.apartment_no;
+          if (r.apartment_no === pref) hasPref = true;
+          ddl.appendChild(opt);
         }
-      } catch (e) {
-        $status.textContent = '無法載入門牌清單（請稍後重試）';
-        $status.className = 'err';
+        if (hasPref) ddl.value = pref;
+        showStatus('ok', '✅ 門牌清單載入完成，共 ' + list.length + ' 戶。');
+      } catch (err) {
+        showStatus('bad', '❌ 無法載入門牌清單：' + err.message);
       }
     }
 
-    async function send() {
-      const apartment = $apt.value.trim();
-      const count = $count.value ? Number($count.value) : null;
-      const note = $note.value.trim();
+    // 量化快捷鍵
+    document.querySelectorAll('[data-q]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const q = Number(btn.dataset.q);
+        if (q === 0) { countEl.value = ''; return; }
+        const cur = Number(countEl.value || 0);
+        countEl.value = String(cur + q);
+      });
+    });
+
+    btnRefresh.addEventListener('click', loadApts);
+
+    btnSend.addEventListener('click', async () => {
+      clearStatus();
+      const apartment = ddl.value;
+      const count = countEl.value ? Number(countEl.value) : undefined;
+      const note = noteEl.value.trim() || undefined;
 
       if (!apartment) {
-        $status.textContent = '請先選擇住戶門牌';
-        $status.className = 'err';
+        showStatus('bad', '❌ 請先選擇門牌。');
         return;
       }
 
-      $btn.disabled = true;
-      $status.textContent = '發送中…';
-      $status.className = '';
+      btnSend.disabled = true;
+      btnSend.textContent = '送出中…';
 
       try {
         const res = await fetch('/api/notify', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
           body: JSON.stringify({ apartment, count, note })
         });
-        const data = await res.json();
-        if (res.ok) {
-          $status.textContent = `已通知 ${apartment}（送達 ${data.results.filter(r => r.ok).length} 人）`;
-          $status.className = 'ok';
-          $count.value = '';
-          $note.value = '';
-        } else if (res.status === 207) {
-          $status.textContent = `部分成功：${apartment}（詳見主控台）`;
-          console.log('Partial results:', data.results);
-          $status.className = 'err';
-        } else {
-          $status.textContent = `通知失敗：${data.error || '未知錯誤'}`;
-          $status.className = 'err';
-        }
-      } catch (e) {
-        $status.textContent = '通知發送過程出錯';
-        $status.className = 'err';
-      } finally {
-        $btn.disabled = false;
-      }
-    }
 
-    $btn.addEventListener('click', send);
-    loadApartments();
+        const text = await res.text();
+        let data = {};
+        try { data = JSON.parse(text); } catch (_) {}
+
+        if (res.status === 200) {
+          const okCount = Array.isArray(data.results) ? data.results.filter(r => r.ok).length : 0;
+          showStatus('ok',
+            '✅ 已送出通知：<span class="badge badge-ok">OK</span> ' +
+            '<span class="cap">' + okCount + '</span> 位。' +
+            (note ? '<br>備註：' + note : '')
+          );
+        } else if (res.status === 207) {
+          // 部分成功
+          const ok = data.results?.filter(r => r.ok).length ?? 0;
+          const fail = data.results?.length ? (data.results.length - ok) : 0;
+          showStatus('partial',
+            '⚠️ 部分成功：<span class="badge badge-partial">PARTIAL</span> ' +
+            'OK <span class="cap">' + ok + '</span> 位；失敗 <span class="cap">' + fail + '</span> 位。\n' +
+            (data.results ? JSON.stringify(data.results, null, 2) : '')
+          );
+        } else {
+          showStatus('bad',
+            '❌ 送出失敗（HTTP ' + res.status + '）。\n' +
+            (text || '')
+          );
+        }
+      } catch (err) {
+        showStatus('bad', '❌ 送出錯誤：' + err.message);
+      } finally {
+        btnSend.disabled = false;
+        btnSend.textContent = '送出通知';
+      }
+    });
+
+    // 初始載入
+    loadApts();
   </script>
 </body>
 </html>
