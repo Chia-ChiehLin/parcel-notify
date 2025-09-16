@@ -194,6 +194,6 @@ async function handleLineEvent(event) {
 }
 
 // ───────────────────────────────────────────────────────────
-app.listen(Number(PORT), () => {
-  console.log(`Server listening on http://localhost:${PORT}`);
+app.listen(Number(PORT), '0.0.0.0', () => {
+  console.log(`Server listening on http://0.0.0.0:${PORT}`);
 });
