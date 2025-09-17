@@ -18,7 +18,6 @@ const {
   PORT = 3000,
   ADMIN_USER = 'guard',
   ADMIN_PASS = 'change_me',
-  DB_PATH = './data/app.db',
   CHANNEL_ACCESS_TOKEN,
   CHANNEL_SECRET,
 } = process.env;
@@ -34,7 +33,7 @@ const app = express();
 app.use(helmet());
 app.use(morgan('dev'));
 
-// DB
+// DB (使用 Postgres)
 const db = await createDb(process.env.DATABASE_URL);
 
 // LINE SDK
@@ -130,6 +129,26 @@ app.post('/api/notify', async (req, res) => {
 
   if (anyFail) return res.status(207).json({ status: 'PARTIAL', results });
   return res.json({ status: 'OK', results });
+});
+
+// ───────────────────────────────────────────────────────────
+// Admin API: 清理舊通知
+app.post('/api/admin/cleanup', async (req, res) => {
+  const { days = 45 } = req.body || {};
+  if (!Number.isInteger(days) || days <= 0) {
+    return res.status(400).json({ error: 'INVALID_DAYS' });
+  }
+
+  try {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+
+    const { rowCount } = await db.cleanupOldNotifications(cutoff.toISOString());
+    res.json({ ok: true, deleted: rowCount, cutoff: cutoff.toISOString() });
+  } catch (err) {
+    console.error('Cleanup error:', err);
+    res.status(500).json({ error: 'CLEANUP_FAILED', message: err.message });
+  }
 });
 
 // ───────────────────────────────────────────────────────────

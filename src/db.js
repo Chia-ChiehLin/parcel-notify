@@ -1,4 +1,4 @@
-// src/db.js  —— Postgres 版
+// src/db.js —— Postgres 版
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -7,7 +7,7 @@ import { Pool } from 'pg';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// 嘗試載入 seed.sql（需為 Postgres 語法）。若執行失敗，會 fallback 到程式內建種子。
+// 嘗試載入 seed.sql（需為 Postgres 語法）
 async function tryExecSeedSQL(pool) {
   const root = process.cwd();
   const candidates = [
@@ -27,13 +27,12 @@ async function tryExecSeedSQL(pool) {
       return true;
     } catch (err) {
       console.warn('[DB] Seed file execution failed (will fallback to JS seed):', err.message);
-      // 不拋出，改讓外層 fallback
     }
   }
   return false;
 }
 
-// 以 JS 產生 A/B 棟 × 1..16 樓 × 每層 1..4 戶，寫入 Apartments（已存在就忽略）
+// 用 JS 種子資料：A/B 棟 × 1..16 樓 × 1..4 戶
 async function seedApartmentsByJS(pool) {
   const values = [];
   for (const bld of ['A', 'B']) {
@@ -45,7 +44,6 @@ async function seedApartmentsByJS(pool) {
     }
   }
 
-  // 批次插入（ON CONFLICT DO NOTHING）
   const text = `
     INSERT INTO apartments (apartment_no, display_name)
     VALUES ${values.map((_, i) => `($${i * 2 + 1}, $${i * 2 + 2})`).join(',')}
@@ -61,7 +59,6 @@ export async function createDb(databaseUrl) {
     throw new Error('Missing DATABASE_URL. Please set it in Render -> Environment -> DATABASE_URL');
   }
 
-  // Render Postgres 需要 SSL；Free/Tier 預設用這個設定即可
   const pool = new Pool({
     connectionString: databaseUrl,
     ssl: { rejectUnauthorized: false },
@@ -95,7 +92,7 @@ export async function createDb(databaseUrl) {
     CREATE INDEX IF NOT EXISTS idx_notif_apt   ON notifications(apartment_no);
   `);
 
-  // 若 apartments 還是空的，先嘗試 seed.sql（Postgres 語法），再 fallback JS 種子
+  // 如果 apartments 是空的 → seed
   const { rows: cntRows } = await pool.query(`SELECT COUNT(1)::int AS c FROM apartments;`);
   if (cntRows[0].c === 0) {
     const hadSeed = await tryExecSeedSQL(pool);
@@ -104,26 +101,25 @@ export async function createDb(databaseUrl) {
     }
   }
 
-  // 正確排序：棟別(A/B/...) → 樓層(數值) → 戶號(數值)
   const LIST_SQL = `
     SELECT
       apartment_no,
       COALESCE(display_name, apartment_no) AS display_name
     FROM apartments
     ORDER BY
-      split_part(apartment_no, '-', 1),             -- 棟別
-      (split_part(apartment_no, '-', 2))::int ASC,  -- 樓層
-      (split_part(apartment_no, '-', 3))::int ASC;  -- 戶號
+      split_part(apartment_no, '-', 1),
+      (split_part(apartment_no, '-', 2))::int ASC,
+      (split_part(apartment_no, '-', 3))::int ASC;
   `;
 
   return {
-    /** 列出全部門牌（依 棟別→樓層→戶號 排序） */
+    /** 列出所有門牌 */
     async listApartments() {
       const { rows } = await pool.query(LIST_SQL);
       return rows;
     },
 
-    /** 確認門牌是否存在 */
+    /** 檢查門牌是否存在 */
     async apartmentExists(apartmentNo) {
       const { rows } = await pool.query(
         `SELECT 1 FROM apartments WHERE apartment_no = $1 LIMIT 1;`,
@@ -132,7 +128,7 @@ export async function createDb(databaseUrl) {
       return rows.length > 0;
     },
 
-    /** 綁定 LINE 使用者到門牌（同戶可多人；重複忽略） */
+    /** 綁定 LINE 使用者 */
     async bindApartmentToUser(apartmentNo, userId) {
       const exists = await this.apartmentExists(apartmentNo);
       if (!exists) return false;
@@ -146,7 +142,7 @@ export async function createDb(databaseUrl) {
       return true;
     },
 
-    /** 取得門牌綁定的所有 LINE userId */
+    /** 取得門牌綁定的 LINE 使用者 */
     async getUserIdsByApartment(apartmentNo) {
       const { rows } = await pool.query(
         `SELECT line_user_id FROM apartment_members WHERE apartment_no = $1;`,
@@ -155,13 +151,22 @@ export async function createDb(databaseUrl) {
       return rows.map(r => r.line_user_id);
     },
 
-    /** 記錄通知發送結果（error 會存 JSON） */
+    /** 新增通知紀錄 */
     async addNotification(apartmentNo, count, note, status, error) {
       await pool.query(
         `INSERT INTO notifications (apartment_no, count, note, status, error)
          VALUES ($1, $2, $3, $4, $5::jsonb);`,
         [apartmentNo, count ?? null, note ?? null, status, error ? JSON.stringify(error) : null]
       );
+    },
+
+    /** 清理 N 天前的通知 */
+    async cleanupOldNotifications(cutoffIso) {
+      const { rowCount } = await pool.query(
+        `DELETE FROM notifications WHERE sent_at < $1;`,
+        [cutoffIso]
+      );
+      return { rowCount };
     },
   };
 }
