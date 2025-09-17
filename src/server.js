@@ -35,7 +35,7 @@ app.use(helmet());
 app.use(morgan('dev'));
 
 // DB
-const db = await createDb(DB_PATH);
+const db = await createDb(process.env.DATABASE_URL);
 
 // LINE SDK
 const lineConfig = {

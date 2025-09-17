@@ -4,8 +4,7 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "start": "node src/server.js",
-    "postinstall": "npm rebuild sqlite3 --build-from-source"
+    "start": "node src/server.js"
   },
   "engines": {
     "node": "20.x"
@@ -16,7 +15,6 @@
     "express": "^4.19.2",
     "helmet": "^7.1.0",
     "morgan": "^1.10.0",
-    "sqlite": "^5.1.1",
-    "sqlite3": "^5.1.7"
+    "pg": "^8.12.0"
   }
 }
