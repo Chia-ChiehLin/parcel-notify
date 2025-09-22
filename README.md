@@ -1,6 +1,6 @@
 🏢Parcel Notify – Apartment Parcel Notification System
 
-🔗Link to this web: https://parcel-notify.onrender.com/
+🔗Link to the website: https://parcel-notify.onrender.com/
 “打開網頁後需要等1分鐘後才會啟動”
 
 📖Introduction
