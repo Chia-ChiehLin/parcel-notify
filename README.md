@@ -1,6 +1,7 @@
 🏢Parcel Notify – Apartment Parcel Notification System
 
 🔗Link to this web: https://parcel-notify.onrender.com/
+“打開網頁後需要等1分鐘後才會啟動”
 
 📖Introduction
 Parcel Notify 是一個專為大樓住戶設計的包裹通知系統。
