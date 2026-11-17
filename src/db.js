@@ -56,12 +56,15 @@ async function seedApartmentsByJS(pool) {
 
 export async function createDb(databaseUrl) {
   if (!databaseUrl) {
-    throw new Error('Missing DATABASE_URL. Please set it in Render -> Environment -> DATABASE_URL');
+    throw new Error('Missing DATABASE_URL. Please set it in Vercel -> Settings -> Environment Variables');
   }
 
+  // 連線字串裡的 sslmode（Neon 預設是 sslmode=require）會覆蓋這裡的 ssl 設定。
+  // Serverless 每個執行個體只需要少量連線，Neon 的 pooler 會再幫忙集中管理。
   const pool = new Pool({
     connectionString: databaseUrl,
     ssl: { rejectUnauthorized: false },
+    max: 3,
   });
 
   // 建表（若不存在）
