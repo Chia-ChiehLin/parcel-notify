@@ -72,6 +72,11 @@ function safeEqual(a, b) {
 
 // ───────────────────────────────────────────────────────────
 // Basic Auth for guard/admin pages & APIs
+// 去掉複製貼上時常多出來的前後空白與引號
+const cleanSecret = (v) => String(v ?? '').trim().replace(/^(['"])(.*)\1$/, '$2');
+const EXPECTED_USER = cleanSecret(ADMIN_USER);
+const EXPECTED_PASS = cleanSecret(ADMIN_PASS);
+
 function basicAuth(req, res, next) {
   const header = req.headers['authorization'] || '';
   const token = header.split(' ')[1] || '';
@@ -79,9 +84,21 @@ function basicAuth(req, res, next) {
   try {
     decoded = Buffer.from(token, 'base64').toString();
   } catch (_) {}
-  const [user, pass] = decoded.split(':');
-  if (user === ADMIN_USER && pass === ADMIN_PASS) return next();
-  res.setHeader('WWW-Authenticate', 'Basic realm="Guard Area"');
+  // 密碼裡可能有冒號，只用第一個冒號切開
+  const sep = decoded.indexOf(':');
+  const user = sep >= 0 ? decoded.slice(0, sep).trim() : '';
+  const pass = sep >= 0 ? decoded.slice(sep + 1).trim() : '';
+
+  const userOk = safeEqual(user, EXPECTED_USER);
+  const passOk = safeEqual(pass, EXPECTED_PASS);
+  if (userOk && passOk) return next();
+
+  // 只記錄哪一項不對，不記錄輸入的內容
+  if (header) {
+    const reason = !userOk && !passOk ? 'wrong_user_and_password' : !userOk ? 'wrong_user' : 'wrong_password';
+    console.warn(`[auth] login failed: ${reason}`);
+  }
+  res.setHeader('WWW-Authenticate', 'Basic realm="Guard Area", charset="UTF-8"');
   return res.status(401).send('Unauthorized');
 }
 
