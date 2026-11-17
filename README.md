@@ -1,6 +1,6 @@
 🏢Parcel Notify – Apartment Parcel Notification System
 
-🔗Link to the website: （部署到 Vercel 後填入網址）
+🔗Link to the website: https://parcel-notify.vercel.app/
 部署步驟請看 [DEPLOY.md](DEPLOY.md)。
 
 📖Introduction
