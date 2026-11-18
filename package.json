@@ -1,20 +1,52 @@
 {
   "name": "parcel-notify",
-  "version": "1.0.0",
-  "type": "module",
+  "version": "2.0.0",
   "private": true,
-  "scripts": {
-    "start": "node src/server.js"
-  },
+  "type": "module",
   "engines": {
     "node": "24.x"
   },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "vercel-build": "tsx scripts/migrate.ts && next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "e2e": "playwright test"
+  },
   "dependencies": {
-    "@line/bot-sdk": "^9.0.0",
-    "dotenv": "^16.4.5",
-    "express": "^4.19.2",
-    "helmet": "^7.1.0",
-    "morgan": "^1.10.0",
-    "pg": "^8.12.0"
+    "@line/bot-sdk": "^11.4.0",
+    "@node-rs/argon2": "^2.2.2",
+    "@vercel/blob": "^2.9.0",
+    "@zxing/browser": "^0.2.1",
+    "drizzle-orm": "^0.45.4",
+    "next": "16.4.6",
+    "pg": "^8.23.1",
+    "qrcode": "^1.5.4",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "server-only": "^0.0.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.1",
+    "@tailwindcss/postcss": "^4.3.5",
+    "@types/node": "^24.19.2",
+    "@types/pg": "^8.15.6",
+    "@types/qrcode": "^1.5.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "drizzle-kit": "^0.31.11",
+    "eslint": "^9.39.0",
+    "eslint-config-next": "16.4.6",
+    "tailwindcss": "^4.3.5",
+    "tsx": "^4.23.15",
+    "typescript": "5.9.3",
+    "vitest": "^5.1.0"
   }
 }

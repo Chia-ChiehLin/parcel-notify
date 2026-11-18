@@ -7,12 +7,23 @@ build/
 .tmp/
 coverage/
 
+# Next.js
+.next/
+out/
+next-env.d.ts
+*.tsbuildinfo
+
+# Tests
+playwright-report/
+test-results/
+blob-report/
+
 # Local env & secrets
 .env
 .env.local
 .env.*.local
 
-# SQLite & local data
+# SQLite & local data (v1)
 data/
 *.db
 

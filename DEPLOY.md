@@ -1,102 +1,56 @@
-# 部署到 Vercel + Neon（免費）
+# 部署 v2 到 Vercel
 
-照著下面的步驟做，大約 20–30 分鐘可以完成。
-做完之後，網站閒置後第一次打開大約 1–3 秒就能用，不用再等 1 分鐘，資料庫也不會過期。
+這份說明的前提：Vercel 專案 `parcel-notify` 和 Neon 資料庫已經建立好，`DATABASE_URL` 已經自動設定。
 
-| 角色 | 服務 | 費用 |
-| --- | --- | --- |
-| 網站與 LINE Webhook | Vercel（Hobby 方案） | 免費 |
-| 資料庫 | Neon Postgres（Free 方案） | 免費 |
-| 每日清理 45 天前的通知 | Vercel Cron（已寫在 `vercel.json`） | 免費 |
+## 步驟 1：新增環境變數
 
-> 開始前請準備好：GitHub 帳號、LINE Developers 後台的登入權限。
+到 Vercel → parcel-notify → **Settings → Environment Variables**，新增下面這些。
+Environments 請勾選 **Production** 和 **Preview**。
 
----
+| Key | 值 | 必填 |
+|---|---|---|
+| `APP_SECRET` | 在終端機執行 `openssl rand -hex 32` 產生的亂數。**設定後不要再改** | ✅ |
+| `SETUP_TOKEN` | 再執行一次 `openssl rand -hex 16` 產生，建立平台管理員時要輸入 | ✅（建好管理員後可刪除） |
+| `CRON_SECRET` | 再執行一次 `openssl rand -hex 32` 產生，給每日排程用 | ✅ |
+| `BRAND_NAME` | 產品名稱，例如「社區包裹通」 | 選填 |
+| `RESEND_API_KEY`、`EMAIL_FROM` | Email 通知，到 [resend.com](https://resend.com) 申請 | 選填 |
 
-## 步驟 1：建立 Neon 資料庫
+> v1 用的 `ADMIN_USER`、`ADMIN_PASS`、`CHANNEL_ACCESS_TOKEN`、`CHANNEL_SECRET` 在 v2 已經不用了。v2 的 LINE 金鑰改成在後台設定，並且加密存在資料庫。
 
-1. 到 https://neon.com 註冊（可以直接用 GitHub 帳號登入）。
-2. 建立新專案（Create project）：
-   - **Project name**：`parcel-notify`
-   - **Region**：選 **AWS Asia Pacific (Singapore)**，離台灣近，也跟 Vercel 的伺服器在同一區。
-3. 建好之後按 **Connect**，確認 **Connection pooling** 是打開的，然後複製整串連線字串。
-   它長得像這樣：`postgresql://neondb_owner:xxxx@ep-xxxx-pooler.ap-southeast-1.aws.neon.tech/neondb?sslmode=require`
-4. 把這串先存著，步驟 3 會用到。**不要貼到 GitHub 或任何公開的地方。**
+## 步驟 2：（選填）建立照片儲存空間
 
-資料表和 A/B 棟 1–16 樓的門牌資料，會在網站第一次連上資料庫時自動建立，不用手動處理。
+Vercel → parcel-notify → **Storage → Create → Blob**，建立後連結到這個專案，`BLOB_READ_WRITE_TOKEN` 會自動加入。
+沒有設定時，照片會存在資料庫裡，只適合少量使用。
 
-## 步驟 2：產生每日清理用的密碼（CRON_SECRET）
+## 步驟 3：部署並建立平台管理員
 
-在終端機執行下面的指令，會產生一長串亂數，存起來，步驟 3 會用到：
+1. 重新部署：推送程式碼到 GitHub，或在 Vercel 按 Redeploy。
+   - 部署時會自動執行資料庫 migration（建立 `app` schema 的資料表）。
+2. 打開 `https://你的網址/setup`，輸入 `SETUP_TOKEN` 的值，然後建立你的平台管理員帳號。
+3. 登入後到 **共用 LINE 帳號** 頁面，貼上官方帳號的 Channel secret 和 access token。
+   - 系統會自動設定好 Webhook，再按「建立圖文選單」。
 
-```bash
-openssl rand -hex 32
-```
+## 步驟 4：開通第一個社區
 
-## 步驟 3：在 Vercel 建立專案
+1. 平台總後台 → **開通新社區**，填寫社區資料並邀請社區管理者。
+2. 進入社區後台，照「開通設定」頁面的步驟完成：
+   1. 管理室資訊
+   2. 產生戶別
+   3. 邀請警衛
+   4. 列印綁定卡
+   5. 登記第一件包裹
 
-1. 到 https://vercel.com 用 GitHub 帳號註冊，方案選 **Hobby**。
-2. 按 **Add New… → Project**，找到 `parcel-notify` 這個 repo，按 **Import**。
-3. **Framework Preset** 選 **Other**，其他建置設定都不用動（`vercel.json` 已經寫好了）。
-4. 展開 **Environment Variables**，一個一個加入下面 6 個：
+## 正式上線前的檢查清單
 
-| Key | 要填什麼 |
-| --- | --- |
-| `ADMIN_USER` | 警衛頁面的帳號 |
-| `ADMIN_PASS` | 警衛頁面的密碼（**一定要改掉預設的 `change_me`**） |
-| `DATABASE_URL` | 步驟 1 複製的 Neon 連線字串 |
-| `CHANNEL_ACCESS_TOKEN` | LINE Developers → 你的 Channel → Messaging API → Channel access token |
-| `CHANNEL_SECRET` | LINE Developers → 你的 Channel → Basic settings → Channel secret |
-| `CRON_SECRET` | 步驟 2 產生的亂數 |
+- [ ] **升級 Vercel Pro。** Hobby 方案禁止商業使用。
+- [ ] 確認 LINE 官方帳號的訊息方案夠用。免費方案每月只有 200 則推播。
+- [ ] 修改 `/privacy` 和 `/terms` 頁面的公司資料，建議請律師審閱。
+- [ ] 設定 Email（Resend），忘記密碼和邀請信才寄得出去。
+- [ ] 刪除 `SETUP_TOKEN`。
 
-   LINE 的兩個值，也可以從本機專案資料夾裡的 `.env` 檔案複製（之前在 Render 用的就是這兩個）。
+## 從 v1 切換到 v2
 
-5. 按 **Deploy**，等它跑完（大約 1 分鐘）。
-6. 部署完成後，Vercel 會給你一個網址，例如 `https://parcel-notify-xxxx.vercel.app`。
-   在 **Settings → Domains** 可以看到正式網址，下面的步驟都用這個網址。
+v1 在 `main` 分支，v2 在 `v2` 分支。兩版共用同一個資料庫，但資料表不衝突：v1 用 `public` schema，v2 用 `app` schema。
 
-## 步驟 4：確認網站正常
-
-1. 打開 `https://你的網址/health`，看到 `{"ok":true}` 就代表網站有起來。
-2. 打開 `https://你的網址/`，輸入步驟 3 設定的帳號密碼，應該會看到警衛頁面和門牌清單。
-   - 如果門牌清單載入失敗，到 Vercel → 專案 → **Logs** 看錯誤訊息，通常是 `DATABASE_URL` 貼錯。
-
-## 步驟 5：把 LINE Webhook 改到新網址
-
-1. 到 https://developers.line.biz → 你的 Provider → 你的 Channel → **Messaging API** 分頁。
-2. **Webhook URL** 改成：`https://你的網址/webhook`
-3. 按 **Verify**，出現 Success 就成功了。
-4. 確認 **Use webhook** 是打開的。
-
-## 步驟 6：請住戶重新綁定（如果需要）
-
-舊的 Render 免費資料庫已經過期，裡面的住戶綁定資料很可能已經被刪除了。
-請住戶在 LINE 官方帳號的聊天室裡，**再傳一次自己的門牌**（例如 `A-14-1`），收到「綁定成功」就可以了。
-
-## 步驟 7：確認每日清理排程
-
-到 Vercel → 專案 → **Settings → Cron Jobs**，應該會看到 `/api/cron/cleanup`，排程是 `0 16 * * *`
-（UTC 16:00，也就是台灣時間每天 00:00 左右，Hobby 方案可能會在那一個小時內的任何時間執行）。
-
-## 步驟 8：關掉舊的 Render 服務
-
-新網站確認沒問題之後，到 Render 後台把舊的 `parcel-notify` Web Service 和資料庫刪掉，避免搞混。
-
----
-
-## 之後怎麼更新網站？
-
-程式改好之後 push 到 GitHub 的 `main` 分支，Vercel 會自動重新部署，不用手動操作。
-
-## 本機開發
-
-```bash
-cp .env.example .env   # 第一次才需要，然後把 .env 裡的值填好
-npm install
-npm start              # 開在 http://localhost:3000
-```
-
-## 備註
-
-- Vercel Hobby 方案限個人、非商業用途。如果之後是由管理公司正式營運，可能需要改用付費方案。
-- Neon 免費方案的資料庫閒置 5 分鐘後會暫停，下一次有人使用時幾秒內會自動喚醒，這就是第一次打開需要 1–3 秒的原因。
+v2 在 Preview 網址驗收通過後，把 `v2` 合併到 `main`，正式網址就會換成 v2。
+v1 的資料表可以在確認不再需要後刪除。
