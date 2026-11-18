@@ -8,7 +8,7 @@ import type { MembershipRole } from '@/db/schema';
 import type { Actor } from '@/domain/audit';
 import { audit } from '@/domain/audit';
 import { parseSettings } from '@/domain/settings';
-import { createSessionRecord, deleteSessionToken, validateSessionToken } from './core';
+import { createSessionRecord, deleteSessionToken, validateSessionToken, type SessionUser } from './core';
 import { getEffectiveRole, hasRole, type EffectiveRole } from './access';
 
 const COOKIE = 'pn_session';
@@ -19,9 +19,9 @@ export async function requestMeta() {
   return { ip, userAgent: h.get('user-agent') };
 }
 
-export async function startSession(userId: string) {
+export async function startSession(user: Pick<SessionUser, 'id' | 'passwordHash'>) {
   const meta = await requestMeta();
-  const { token, expiresAt } = await createSessionRecord(userId, meta);
+  const { token, expiresAt } = await createSessionRecord(user, meta);
   const jar = await cookies();
   jar.set(COOKIE, token, {
     httpOnly: true,

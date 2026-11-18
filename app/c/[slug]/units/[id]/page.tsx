@@ -1,11 +1,14 @@
+import { EmailVerificationForm } from '@/components/email-verification-form';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { hasRole } from '@/auth/access';
 import { requireCommunity } from '@/auth/session';
 import {
   addEmailResidentAction,
+  correctEmailResidentAction,
+  verifyCommunityEmailAction,
   deleteUnitAction,
   moveOutAction,
   removeResidentAction,
@@ -31,8 +34,8 @@ export default async function UnitDetail({ params }: { params: Promise<{ slug: s
   if (!unit) notFound();
   const isAdmin = hasRole(ctx.role, 'community_admin');
   const [members, parcels, resolved] = await Promise.all([
-    listUnitMembers(unit.id),
-    db().select().from(schema.parcels).where(eq(schema.parcels.unitId, unit.id)).orderBy(desc(schema.parcels.receivedAt)).limit(30),
+    listUnitMembers(ctx.community.id, unit.id),
+    db().select().from(schema.parcels).where(and(eq(schema.parcels.communityId, ctx.community.id), eq(schema.parcels.unitId, unit.id))).orderBy(desc(schema.parcels.receivedAt)).limit(30),
     resolveCommunityChannel(ctx.community),
   ]);
   const bindUrl = resolved?.channel.basicId ? lineBindUrl(resolved.channel.basicId, unit.bindCode) : null;
@@ -76,7 +79,24 @@ export default async function UnitDetail({ params }: { params: Promise<{ slug: s
                       </Td>
                       <Td className="space-x-1">
                         {m.lineUserId ? <Badge tone={m.lineFollowing && m.notifyLine ? 'green' : 'gray'}>{m.lineFollowing ? (m.notifyLine ? 'LINE' : 'LINE 已關閉') : '已封鎖官方帳號'}</Badge> : null}
-                        {m.email ? <Badge tone={m.notifyEmail ? 'blue' : 'gray'}>Email</Badge> : null}
+                        {m.email ? <Badge tone={m.notifyEmail && m.emailVerifiedAt && m.verifiedEmail === m.email ? 'blue' : 'gray'}>
+                          {m.notifyEmail ? (m.emailVerifiedAt && m.verifiedEmail === m.email ? 'Email 已驗證' : 'Email 待驗證') : 'Email 已關閉'}
+                        </Badge> : null}
+                        {isAdmin && m.email && m.notifyEmail && (!m.emailVerifiedAt || m.verifiedEmail !== m.email) ? (
+                          <details className="mt-2 text-sm"><summary className="cursor-pointer">協助驗證信箱</summary>
+                            <EmailVerificationForm atDesk action={verifyCommunityEmailAction.bind(null, slug, unit.id, m.id)} />
+                          </details>
+                        ) : null}
+                        {isAdmin && !m.lineUserId ? (
+                          <details className="mt-2 text-sm"><summary className="cursor-pointer">更正信箱或停用 Email</summary>
+                            <ActionForm action={correctEmailResidentAction.bind(null, slug, unit.id, m.id)} submitLabel="儲存">
+                              <input type="hidden" name="version" value={m.tokenVersion} />
+                              <Field label="住戶信箱"><Input name="email" type="email" defaultValue={m.email ?? ''} maxLength={254} /></Field>
+                              <label><input type="checkbox" name="consent" defaultChecked={m.notifyEmail} /> 已向住戶本人確認同意收取通知</label>
+                              <p className="text-xs text-gray-600">更換信箱後須重新驗證。要停止寄送，可取消勾選並儲存。</p>
+                            </ActionForm>
+                          </details>
+                        ) : null}
                       </Td>
                       <Td className="text-sm text-gray-500">{formatDateTime(m.boundAt)}</Td>
                       {isAdmin ? (
@@ -162,15 +182,16 @@ export default async function UnitDetail({ params }: { params: Promise<{ slug: s
               </CardBody>
             </Card>
             <Card>
-              <CardHeader title="新增 Email 住戶" description="給沒有 LINE 的住戶，包裹到了會寄 Email" />
+              <CardHeader title="新增 Email 住戶" description="請先取得住戶同意。新增後會寄出一封不含包裹資料的驗證信，再請住戶到管理室出示驗證碼。" />
               <CardBody>
                 <ActionForm action={addEmailResidentAction.bind(null, slug, unit.id)} submitLabel="新增" resetOnSuccess>
                   <Field label="姓名">
                     <Input name="name" />
                   </Field>
                   <Field label="Email">
-                    <Input name="email" type="email" required />
+                    <Input name="email" type="email" maxLength={254} required />
                   </Field>
+                  <label className="text-sm"><input name="consent" type="checkbox" required /> 已向住戶本人確認同意使用此信箱接收通知</label>
                 </ActionForm>
               </CardBody>
             </Card>
@@ -181,7 +202,7 @@ export default async function UnitDetail({ params }: { params: Promise<{ slug: s
                   <Field label="門牌">
                     <Input name="label" defaultValue={unit.label} required />
                   </Field>
-                  <Field label="狀態">
+                  <Field label="狀態" hint="變更此標示會保留住戶的權限；住戶搬離時請使用「遷出重設」。">
                     <Select name="status" defaultValue={unit.status}>
                       <option value="active">使用中</option>
                       <option value="vacant">空戶</option>

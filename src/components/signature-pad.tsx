@@ -32,6 +32,8 @@ export function SignaturePad({ onChange }: { onChange: (dataUrl: string | null) 
     <div>
       <canvas
         ref={canvasRef}
+        aria-label="領取人簽名區"
+        onPointerCancel={() => { drawing.current = false; }}
         className="h-40 w-full touch-none rounded-lg border-2 border-dashed border-gray-300 bg-white"
         onPointerDown={(e) => {
           drawing.current = true;

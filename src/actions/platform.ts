@@ -2,8 +2,9 @@
 
 import { revalidatePath } from 'next/cache';
 import { eq } from 'drizzle-orm';
+import { z } from 'zod';
 import { db, schema } from '@/db';
-import type { CommunityStatus, LineMode, MembershipRole } from '@/db/schema';
+import type { CommunityStatus, MembershipRole } from '@/db/schema';
 import { requirePlatformAdmin, actorFor } from '@/auth/session';
 import { deleteUserSessions } from '@/auth/core';
 import { addBillingRecord } from '@/domain/billing';
@@ -15,12 +16,12 @@ import {
   updateCommunityPlan,
   updateOrganization,
 } from '@/domain/communities';
-import { configureChannel, getSharedChannel } from '@/domain/line-channels';
+import { configureChannel, getSharedChannel, verifyInstalledWebhook } from '@/domain/line-channels';
 import { installRichMenu } from '@/line/rich-menu';
 import { createResetLinkForUser, inviteByPlatform } from '@/domain/staff';
 import { DomainError } from '@/domain/types';
 import type { ActionState } from '@/components/form';
-import { bool, num, run, str } from './util';
+import { bool, errorMessage, num, run, str } from './util';
 
 async function admin() {
   const user = await requirePlatformAdmin();
@@ -30,32 +31,49 @@ async function admin() {
 export async function createCommunityAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
   return run(async () => {
     const { actor } = await admin();
+    const adminEmail = str(fd, 'adminEmail');
+    if (adminEmail && !z.email().safeParse(adminEmail).success) throw new DomainError('請輸入有效的社區管理者 Email');
+    const lineMode = str(fd, 'lineMode') || 'shared';
+    if (lineMode !== 'shared' && lineMode !== 'own') throw new DomainError('請選擇要使用的 LINE 帳號');
+    const trialDays = Number(str(fd, 'trialDays') || 14);
+    if (!Number.isInteger(trialDays) || trialDays < 0 || trialDays > 90) throw new DomainError('試用天數須為 0 至 90 的整數');
+    const planId = str(fd, 'planId');
+    const orgId = str(fd, 'orgId') || null;
+    if (!z.uuid().safeParse(planId).success) throw new DomainError('請選擇方案');
+    if (orgId && !z.uuid().safeParse(orgId).success) throw new DomainError('請選擇所屬物業公司');
+    const [plan] = await db().select({ active: schema.plans.isActive }).from(schema.plans).where(eq(schema.plans.id, planId));
+    if (!plan?.active) throw new DomainError('方案已停用或不存在，請重新選擇');
     const community = await createCommunity(actor, {
-      orgId: str(fd, 'orgId') || null,
+      orgId,
       orgName: str(fd, 'orgName') || null,
       name: str(fd, 'name'),
       slug: str(fd, 'slug'),
       address: str(fd, 'address'),
-      planId: str(fd, 'planId'),
-      trialDays: num(fd, 'trialDays', 14),
-      lineMode: (str(fd, 'lineMode') || 'shared') as LineMode,
+      planId,
+      trialDays,
+      lineMode,
     });
     let invite: { url: string; emailed: boolean } | null = null;
-    const adminEmail = str(fd, 'adminEmail');
+    let inviteError: string | null = null;
     if (adminEmail) {
-      invite = await inviteByPlatform(actor, {
-        email: adminEmail,
-        name: str(fd, 'adminName'),
-        role: 'community_admin',
-        communityId: community.id,
-        where: community.name,
-      });
+      try {
+        invite = await inviteByPlatform(actor, {
+          email: adminEmail,
+          name: str(fd, 'adminName'),
+          role: 'community_admin',
+          communityId: community.id,
+          where: community.name,
+        });
+      } catch (err) {
+        // 客戶已建立。保留客戶連結，讓服務商直接補發邀請。
+        inviteError = errorMessage(err);
+      }
     }
     revalidatePath('/admin/communities');
     return {
       ok: true,
       message: `已建立社區「${community.name}」`,
-      data: { communityId: community.id, slug: community.slug, inviteUrl: invite?.url ?? null, emailed: invite?.emailed ?? false },
+      data: { communityId: community.id, slug: community.slug, inviteUrl: invite?.url ?? null, emailed: invite?.emailed ?? false, inviteError },
     };
   });
 }
@@ -149,7 +167,7 @@ export async function savePlanAction(planId: string | null, _prev: ActionState, 
       monthlyPrice: Math.max(0, num(fd, 'monthlyPrice', 0)),
       sortOrder: num(fd, 'sortOrder', 0),
       isActive: bool(fd, 'isActive'),
-      features: { email: bool(fd, 'fEmail'), photos: bool(fd, 'fPhotos'), sms: bool(fd, 'fSms'), ownLine: bool(fd, 'fOwnLine') },
+      features: { email: bool(fd, 'fEmail'), photos: bool(fd, 'fPhotos'), sms: false, ownLine: bool(fd, 'fOwnLine') },
     };
     if (!/^[a-z0-9-]{2,30}$/.test(values.code)) throw new DomainError('方案代碼只能用小寫英文、數字和連字號');
     if (!values.name) throw new DomainError('請輸入方案名稱');
@@ -207,4 +225,14 @@ export async function toggleUserStatusAction(userId: string) {
   await db().update(schema.users).set({ status }).where(eq(schema.users.id, userId));
   if (status === 'disabled') await deleteUserSessions(userId);
   revalidatePath('/admin/users');
+}
+
+export async function verifySharedWebhookAction(): Promise<ActionState> {
+  return run(async () => {
+    await admin();
+    const channel = await getSharedChannel();
+    if (!channel) throw new DomainError('請先設定平台共用帳號。');
+    await verifyInstalledWebhook(channel);
+    return { ok: true, message: 'LINE 已啟用 Webhook，本站已收到驗證請求。下一步可用測試住戶確認收件通知。' };
+  });
 }

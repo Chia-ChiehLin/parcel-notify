@@ -10,6 +10,7 @@ export interface LineGateway {
   push(creds: LineCreds, to: string, messages: LineMessage[]): Promise<void>;
   reply(creds: LineCreds, replyToken: string, messages: LineMessage[]): Promise<void>;
   getBotInfo(creds: LineCreds): Promise<{ basicId: string; displayName: string; userId: string }>;
+  getWebhook(creds: LineCreds): Promise<{ endpoint: string; active: boolean } | null>;
   setWebhook(creds: LineCreds, url: string): Promise<void>;
   testWebhook(creds: LineCreds, url: string): Promise<{ success: boolean; detail?: string }>;
   getProfile(creds: LineCreds, userId: string): Promise<{ displayName: string } | null>;
@@ -42,6 +43,16 @@ const realLine: LineGateway = {
     const client = new messagingApi.MessagingApiClient({ channelAccessToken: creds.accessToken });
     const info = await client.getBotInfo();
     return { basicId: info.basicId, displayName: info.displayName, userId: info.userId };
+  },
+  async getWebhook(creds) {
+    const { messagingApi, HTTPFetchError } = await import('@line/bot-sdk');
+    const client = new messagingApi.MessagingApiClient({ channelAccessToken: creds.accessToken });
+    try {
+      return await client.getWebhookEndpoint();
+    } catch (error) {
+      if (error instanceof HTTPFetchError && error.status === 404) return null;
+      throw error;
+    }
   },
   async setWebhook(creds, url) {
     const { messagingApi } = await import('@line/bot-sdk');
@@ -90,10 +101,10 @@ const realEmail: EmailGateway = {
       method: 'POST',
       headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ from: process.env.EMAIL_FROM, to: [msg.to], subject: msg.subject, html: msg.html, text: msg.text }),
+      signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) {
-      const body = await res.text().catch(() => '');
-      throw new Error(`Email 發送失敗（${res.status}）${body.slice(0, 200)}`);
+      throw new Error(`Email 發送失敗（${res.status}）`);
     }
   },
 };

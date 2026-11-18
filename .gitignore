@@ -20,8 +20,8 @@ blob-report/
 
 # Local env & secrets
 .env
-.env.local
-.env.*.local
+.env.*
+!.env.example
 
 # SQLite & local data (v1)
 data/

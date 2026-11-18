@@ -1,3 +1,4 @@
+import { requirePlatformAdmin } from '@/auth/session';
 import Link from 'next/link';
 import { listBillingRecords } from '@/domain/billing';
 import { Card, EmptyState, PageHeader, Table, Td, Th } from '@/components/ui';
@@ -8,6 +9,7 @@ export const metadata = { title: '收款紀錄' };
 export const dynamic = 'force-dynamic';
 
 export default async function BillingPage() {
+  await requirePlatformAdmin();
   const rows = await listBillingRecords();
   const total = rows.reduce((s, r) => s + r.record.amount, 0);
   const csv = toCsv([

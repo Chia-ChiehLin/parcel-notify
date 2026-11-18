@@ -1,5 +1,5 @@
-import { and, asc, count, desc, eq, sql } from 'drizzle-orm';
-import { db, schema } from '@/db';
+import { and, asc, count, desc, eq, inArray, isNull, lt, gte, sql } from 'drizzle-orm';
+import { db, schema, type DB } from '@/db';
 import type { CommunityStatus, LineMode } from '@/db/schema';
 import { addDays, dateKey } from '@/lib/time';
 import { audit, type Actor } from './audit';
@@ -42,8 +42,8 @@ export async function listPlans(onlyActive = false) {
   return rows;
 }
 
-export async function getCommunityWithPlan(communityId: string) {
-  const [row] = await db()
+export async function getCommunityWithPlan(communityId: string, database: Pick<DB, 'select'> = db()) {
+  const [row] = await database
     .select({ community: schema.communities, plan: schema.plans, org: schema.organizations })
     .from(schema.communities)
     .innerJoin(schema.plans, eq(schema.communities.planId, schema.plans.id))
@@ -181,21 +181,13 @@ export async function updateCommunityPlan(
 }
 
 /** 目前方案的上限檢查 */
-export async function assertWithinUnitLimit(communityId: string, adding: number) {
-  const { plan } = await getCommunityWithPlan(communityId);
-  const [row] = await db().select({ n: count() }).from(schema.units).where(eq(schema.units.communityId, communityId));
-  if ((row?.n ?? 0) + adding > plan.maxUnits) {
-    throw new DomainError(`超過「${plan.name}」的戶數上限（${plan.maxUnits} 戶），請升級方案`);
-  }
-}
-
-export async function assertWithinStaffLimit(communityId: string) {
-  const { plan } = await getCommunityWithPlan(communityId);
-  const [row] = await db()
+export async function assertWithinStaffLimit(communityId: string, database: Pick<DB, 'select'> = db()) {
+  const { plan } = await getCommunityWithPlan(communityId, database);
+  const [row] = await database
     .select({ n: count() })
     .from(schema.memberships)
     .where(eq(schema.memberships.communityId, communityId));
-  const [pending] = await db()
+  const [pending] = await database
     .select({ n: count() })
     .from(schema.authTokens)
     .where(
@@ -212,23 +204,25 @@ export async function assertWithinStaffLimit(communityId: string) {
 
 /** 試用到期、付費到期加寬限期 → 自動停用；回傳被停用的社區 */
 export async function applyExpiry(now = new Date()) {
-  const rows = await db().select().from(schema.communities);
-  const suspended: string[] = [];
-  const today = dateKey(now);
-  const graceCutoff = dateKey(addDays(now, -GRACE_DAYS));
-  for (const c of rows) {
-    if (c.status === 'trial' && c.trialEndsAt && c.trialEndsAt < now && !c.paidUntil) {
-      await setCommunityStatus({ type: 'system', name: '系統' }, c.id, 'suspended', '試用到期');
-      suspended.push(c.id);
-    } else if ((c.status === 'active' || c.status === 'trial') && c.paidUntil && c.paidUntil < graceCutoff) {
-      await setCommunityStatus({ type: 'system', name: '系統' }, c.id, 'suspended', '付費到期');
-      suspended.push(c.id);
-    } else if (c.status === 'trial' && c.paidUntil && c.paidUntil >= today) {
-      // 試用期間已經付款 → 轉為正式
-      await setCommunityStatus({ type: 'system', name: '系統' }, c.id, 'active', '已付款');
+  const c = schema.communities;
+  return db().transaction(async (tx) => {
+    const changes = [
+      { status: 'suspended', reason: '試用到期', where: and(eq(c.status, 'trial'), isNull(c.paidUntil), lt(c.trialEndsAt, now)) },
+      { status: 'suspended', reason: '付費到期', where: and(inArray(c.status, ['active', 'trial']), lt(c.paidUntil, dateKey(addDays(now, -GRACE_DAYS)))) },
+      { status: 'active', reason: '已付款', where: and(eq(c.status, 'trial'), gte(c.paidUntil, dateKey(now))) },
+    ] as const;
+    const suspended: string[] = [];
+    for (const change of changes) {
+      const affected = await tx.update(c).set({ status: change.status, updatedAt: now }).where(change.where).returning({ id: c.id });
+      for (const { id } of affected) {
+        await audit({ type: 'system', name: '系統' }, 'community.status', {
+          communityId: id, entityType: 'community', entityId: id, data: { status: change.status, reason: change.reason },
+        }, tx);
+        if (change.status === 'suspended') suspended.push(id);
+      }
     }
-  }
-  return suspended;
+    return suspended;
+  });
 }
 
 /** 平台後台的客戶列表 */

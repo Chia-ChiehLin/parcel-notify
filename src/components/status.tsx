@@ -16,11 +16,12 @@ export function ParcelStatusBadge({ status, overdue }: { status: ParcelStatus; o
 }
 
 const NOTIFY_LABELS: Record<NotifyStatus, [string, 'green' | 'yellow' | 'red' | 'gray' | 'blue']> = {
+  sending: ['傳送中', 'blue'],
   pending: ['未通知', 'gray'],
   sent: ['已通知', 'green'],
   partial: ['部分成功', 'yellow'],
   failed: ['通知失敗', 'red'],
-  no_recipient: ['未綁定', 'gray'],
+  no_recipient: ['無可用收件人', 'gray'],
   skipped: ['未發送', 'gray'],
 };
 

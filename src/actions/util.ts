@@ -16,7 +16,8 @@ export function errorMessage(e: unknown): string {
   unstable_rethrow(e);
   if (isDomainError(e)) return e.message;
   if (e instanceof Error && /^(只接受|圖片)/.test(e.message)) return e.message;
-  console.error('[action] unexpected error', e);
+  // Database errors can include bound parameters (resident details and credential hashes).
+  console.error('[action] unexpected error', e instanceof Error ? e.name : 'UnknownError');
   return '系統發生錯誤，請稍後再試。若持續發生請聯絡客服。';
 }
 
@@ -26,7 +27,9 @@ export function str(fd: FormData, key: string): string {
 }
 
 export function num(fd: FormData, key: string, fallback = 0): number {
-  const v = Number(str(fd, key));
+  const raw = str(fd, key);
+  if (!raw) return fallback;
+  const v = Number(raw);
   return Number.isFinite(v) ? v : fallback;
 }
 

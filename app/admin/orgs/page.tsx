@@ -1,3 +1,4 @@
+import { requirePlatformAdmin } from '@/auth/session';
 import { asc, eq, isNotNull, sql } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { inviteOrgAdminAction, saveOrgAction } from '@/actions/platform';
@@ -8,6 +9,7 @@ export const metadata = { title: '物業公司' };
 export const dynamic = 'force-dynamic';
 
 export default async function OrgsPage() {
+  await requirePlatformAdmin();
   const orgs = await db()
     .select({
       org: schema.organizations,

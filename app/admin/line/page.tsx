@@ -1,4 +1,5 @@
-import { configureSharedLineAction, installSharedRichMenuAction } from '@/actions/platform';
+import { requirePlatformAdmin } from '@/auth/session';
+import { configureSharedLineAction, installSharedRichMenuAction, verifySharedWebhookAction } from '@/actions/platform';
 import { credsOf, getChannelQuota, getSharedChannel, lineAddFriendUrl, webhookUrlFor } from '@/domain/line-channels';
 import { LineSetupForm } from '@/components/line-setup';
 import { StateButton } from '@/components/state-button';
@@ -9,6 +10,7 @@ export const metadata = { title: '共用 LINE 帳號' };
 export const dynamic = 'force-dynamic';
 
 export default async function SharedLinePage() {
+  await requirePlatformAdmin();
   const channel = await getSharedChannel();
   const quota = channel ? await getChannelQuota({ channel, creds: credsOf(channel) }) : null;
   return (
@@ -16,7 +18,7 @@ export default async function SharedLinePage() {
       <PageHeader title="共用 LINE 官方帳號" description="選擇「共用帳號」的社區，住戶都會加入這個官方帳號。訊息費由這個帳號的 LINE 方案負擔，請反映在售價中。" />
       {channel ? (
         <Card className="mb-6">
-          <CardHeader title={channel.displayName ?? channel.name} description={channel.basicId ?? ''} actions={<Badge tone="green">已連線</Badge>} />
+          <CardHeader title={channel.displayName ?? channel.name} description={channel.basicId ?? ''} actions={<Badge tone="green">已儲存帳號</Badge>} />
           <CardBody className="grid gap-4 text-sm md:grid-cols-2">
             <div className="space-y-2">
               <div>
@@ -30,7 +32,7 @@ export default async function SharedLinePage() {
                 </a>
               </div>
               <div>
-                <span className="text-gray-500">最後驗證：</span>
+                <span className="text-gray-500">最近設定：</span>
                 {formatDateTime(channel.verifiedAt)}
               </div>
               <div>
@@ -39,6 +41,7 @@ export default async function SharedLinePage() {
               </div>
             </div>
             <div className="space-y-2">
+              <StateButton action={verifySharedWebhookAction}>檢查 LINE Webhook 連線</StateButton>
               <div className="font-medium text-gray-700">圖文選單</div>
               <p className="text-gray-500">{channel.richMenuId ? '已建立。重新建立會覆蓋目前的預設選單。' : '建立後，住戶聊天室下方會出現「我的包裹／取件 QR／通知設定／使用說明」按鈕。'}</p>
               <StateButton action={installSharedRichMenuAction}>{channel.richMenuId ? '重新建立圖文選單' : '建立圖文選單'}</StateButton>

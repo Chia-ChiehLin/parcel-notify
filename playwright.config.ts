@@ -12,7 +12,7 @@ export default defineConfig({
   workers: 1,
   reporter: [['list']],
   use: {
-    baseURL: `http://localhost:${PORT}`,
+    baseURL: `http://127.0.0.1:${PORT}`,
     locale: 'zh-TW',
     timezoneId: 'Asia/Taipei',
     trace: 'retain-on-failure',
@@ -23,17 +23,20 @@ export default defineConfig({
   ],
   globalSetup: './e2e/global-setup.ts',
   webServer: {
-    command: `npx next start -p ${PORT}`,
-    url: `http://localhost:${PORT}/api/health`,
+    command: `node --import ./e2e/provider-fixtures.mjs ./node_modules/next/dist/bin/next start -H 127.0.0.1 -p ${PORT}`,
+    url: `http://127.0.0.1:${PORT}/api/health`,
     reuseExistingServer: false,
     timeout: 120_000,
     env: {
       DATABASE_URL: E2E_DATABASE_URL,
       APP_SECRET: E2E_SECRET,
-      APP_URL: `http://localhost:${PORT}`,
+      APP_URL: `http://127.0.0.1:${PORT}`,
       SETUP_TOKEN: E2E_SETUP_TOKEN,
       CRON_SECRET: 'e2e-cron',
       PG_POOL_MAX: '5',
+      BLOB_READ_WRITE_TOKEN: '',
+      RESEND_API_KEY: 'playwright-fixture',
+      EMAIL_FROM: 'sender@example.test',
     },
   },
 });

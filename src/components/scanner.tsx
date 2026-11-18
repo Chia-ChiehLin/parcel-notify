@@ -5,6 +5,7 @@ import { Button } from './ui';
 
 /** 用平板／手機相機掃條碼或 QR code。USB／藍牙掃描槍則直接打字到輸入框即可，不需要這個元件。 */
 export function CameraScanner({ onResult, onClose, title = '掃描' }: { onResult: (text: string) => void; onClose: () => void; title?: string }) {
+  const dialog = useRef<HTMLDialogElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [error, setError] = useState<string | null>(null);
   // 父元件每次重繪都會傳新的函式，用 ref 保存避免相機重新啟動
@@ -14,11 +15,13 @@ export function CameraScanner({ onResult, onClose, title = '掃描' }: { onResul
   }, [onResult]);
 
   useEffect(() => {
+    dialog.current?.showModal();
     let stopped = false;
     let controls: { stop: () => void } | null = null;
     (async () => {
       try {
         const { BrowserMultiFormatReader } = await import('@zxing/browser');
+        if (stopped || !videoRef.current) return;
         const reader = new BrowserMultiFormatReader();
         controls = await reader.decodeFromVideoDevice(undefined, videoRef.current!, (result) => {
           if (result && !stopped) {
@@ -31,7 +34,7 @@ export function CameraScanner({ onResult, onClose, title = '掃描' }: { onResul
         if (stopped) controls.stop();
       } catch (e) {
         const name = (e as { name?: string })?.name;
-        setError(name === 'NotAllowedError' ? '沒有相機權限，請在瀏覽器設定允許使用相機' : '無法開啟相機');
+        if (!stopped) setError(name === 'NotAllowedError' ? '沒有相機權限，請在瀏覽器設定允許使用相機' : '無法開啟相機');
       }
     })();
     return () => {
@@ -41,7 +44,7 @@ export function CameraScanner({ onResult, onClose, title = '掃描' }: { onResul
   }, []);
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-black/90 p-4">
+    <dialog ref={dialog} onCancel={onClose} aria-label={title} className="fixed inset-0 m-0 h-dvh max-h-none w-screen max-w-none flex-col bg-black/90 p-4 open:flex">
       <div className="mb-3 flex items-center justify-between text-white">
         <span className="text-lg font-semibold">{title}</span>
         <Button variant="secondary" onClick={onClose}>
@@ -53,7 +56,7 @@ export function CameraScanner({ onResult, onClose, title = '掃描' }: { onResul
         {!error ? <div className="pointer-events-none absolute inset-x-[15%] top-1/2 h-40 -translate-y-1/2 rounded-xl border-4 border-white/70" /> : null}
       </div>
       <p className="mt-3 text-center text-sm text-white/70">把條碼或 QR code 對準框框</p>
-    </div>
+    </dialog>
   );
 }
 

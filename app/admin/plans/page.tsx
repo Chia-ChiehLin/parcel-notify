@@ -1,3 +1,4 @@
+import { requirePlatformAdmin } from '@/auth/session';
 import { savePlanAction } from '@/actions/platform';
 import { listPlans } from '@/domain/communities';
 import { ActionForm } from '@/components/action-form';
@@ -34,7 +35,6 @@ function PlanFields({ plan }: { plan?: typeof schema.plans.$inferSelect }) {
         <Checkbox name="fEmail" label="Email 通知" defaultChecked={plan?.features.email ?? true} />
         <Checkbox name="fPhotos" label="包裹拍照" defaultChecked={plan?.features.photos ?? false} />
         <Checkbox name="fOwnLine" label="自有 LINE 帳號" defaultChecked={plan?.features.ownLine ?? false} />
-        <Checkbox name="fSms" label="簡訊（第 2 階段）" defaultChecked={plan?.features.sms ?? false} />
         <Checkbox name="isActive" label="可供選擇" defaultChecked={plan?.isActive ?? true} />
       </div>
     </>
@@ -42,6 +42,7 @@ function PlanFields({ plan }: { plan?: typeof schema.plans.$inferSelect }) {
 }
 
 export default async function PlansPage() {
+  await requirePlatformAdmin();
   const plans = await listPlans();
   return (
     <>

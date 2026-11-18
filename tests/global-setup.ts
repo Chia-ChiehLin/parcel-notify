@@ -1,3 +1,4 @@
+import { requireLocalTestDatabase } from './local-database';
 import { Client } from 'pg';
 import { migrate } from 'drizzle-orm/node-postgres/migrator';
 import { drizzle } from 'drizzle-orm/node-postgres';
@@ -9,6 +10,7 @@ export const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL ?? 'postgres://po
 export default async function setup() {
   const client = new Client({ connectionString: TEST_DATABASE_URL });
   await client.connect();
+  await requireLocalTestDatabase(client, 'parcel_test');
   await client.query('drop schema if exists app cascade; drop schema if exists drizzle cascade;');
   await migrate(drizzle(client), { migrationsFolder: path.join(process.cwd(), 'src/db/migrations') });
   await client.end();

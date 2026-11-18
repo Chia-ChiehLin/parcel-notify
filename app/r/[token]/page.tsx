@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, gte } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { listProxyCodes } from '@/domain/pickup';
 import { waitingForUnit } from '@/domain/parcels';
@@ -21,11 +21,12 @@ export default async function ResidentHome({ params }: { params: Promise<{ token
   const d = dict(r.resident.language);
   const settings = parseSettings(r.community.settings);
   const [waiting, history, proxies] = await Promise.all([
-    waitingForUnit(r.community.id, r.unit.id),
+    waitingForUnit(r.community.id, r.unit.id, r.unit.occupancyStartedAt),
     db()
       .select()
       .from(schema.parcels)
-      .where(and(eq(schema.parcels.unitId, r.unit.id), eq(schema.parcels.status, 'picked_up')))
+      .where(and(eq(schema.parcels.communityId, r.community.id), eq(schema.parcels.unitId, r.unit.id), eq(schema.parcels.status, 'picked_up'),
+        r.unit.occupancyStartedAt ? gte(schema.parcels.receivedAt, r.unit.occupancyStartedAt) : undefined))
       .orderBy(desc(schema.parcels.pickedUpAt))
       .limit(10),
     listProxyCodes(r.resident.id),
@@ -35,7 +36,7 @@ export default async function ResidentHome({ params }: { params: Promise<{ token
   const base = `/r/${token}`;
 
   return (
-    <>
+    <main lang={r.resident.language === 'en' ? 'en' : 'zh-Hant'}>
       <AutoRefresh seconds={9 * 60} />
       <header className="bg-brand-700 px-5 pb-6 pt-8 text-white">
         <div className="text-sm opacity-80">{r.community.name}</div>
@@ -57,7 +58,7 @@ export default async function ResidentHome({ params }: { params: Promise<{ token
             <p className="py-6 text-center text-gray-500">{d.noParcels}</p>
           ) : (
             <>
-              <div className="mx-auto mt-4 w-60" dangerouslySetInnerHTML={{ __html: qr! }} />
+              <div role="img" aria-label={d.viewPickupQr} className="mx-auto mt-4 w-60 max-w-full" dangerouslySetInnerHTML={{ __html: qr! }} />
               <p className="mt-2 text-center text-sm text-gray-600">{d.showQrHint}</p>
               <p className="text-center text-xs text-gray-400">{d.qrRefresh}</p>
               <ul className="mt-4 divide-y divide-gray-100">
@@ -141,7 +142,7 @@ export default async function ResidentHome({ params }: { params: Promise<{ token
           )}
         </div>
       </section>
-    </>
+    </main>
   );
 }
 

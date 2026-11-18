@@ -6,7 +6,7 @@
  * - 社區管理者（community_admin）：只限自己的社區
  * - 警衛／櫃台（staff）：只限自己的社區，只能做收發相關操作
  */
-import { and, asc, eq, inArray, isNotNull, or } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, isNull, or } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import type { MembershipRole } from '@/db/schema';
 
@@ -33,6 +33,9 @@ export function hasRole(role: EffectiveRole | null | undefined, min: MembershipR
 type UserLike = { id: string; isPlatformAdmin: boolean };
 type CommunityLike = { id: string; orgId: string };
 
+const communityGrant = and(isNull(schema.memberships.orgId), inArray(schema.memberships.role, ['community_admin', 'staff']));
+const orgGrant = and(isNull(schema.memberships.communityId), eq(schema.memberships.role, 'org_admin'));
+
 export async function getEffectiveRole(user: UserLike, community: CommunityLike): Promise<EffectiveRole | null> {
   if (user.isPlatformAdmin) return 'platform_admin';
   const rows = await db()
@@ -41,7 +44,7 @@ export async function getEffectiveRole(user: UserLike, community: CommunityLike)
     .where(
       and(
         eq(schema.memberships.userId, user.id),
-        or(eq(schema.memberships.communityId, community.id), eq(schema.memberships.orgId, community.orgId)),
+        or(and(communityGrant, eq(schema.memberships.communityId, community.id)), and(orgGrant, eq(schema.memberships.orgId, community.orgId))),
       ),
     );
   let best: EffectiveRole | null = null;
@@ -64,7 +67,7 @@ export async function listAccessibleCommunities(user: UserLike) {
   if (user.isPlatformAdmin) {
     return db().select(cols).from(schema.communities).orderBy(asc(schema.communities.name));
   }
-  const mems = await db().select().from(schema.memberships).where(eq(schema.memberships.userId, user.id));
+  const mems = await db().select().from(schema.memberships).where(and(eq(schema.memberships.userId, user.id), or(communityGrant, orgGrant)));
   const communityIds = mems.filter((m) => m.communityId).map((m) => m.communityId!);
   const orgIds = mems.filter((m) => m.orgId).map((m) => m.orgId!);
   if (!communityIds.length && !orgIds.length) return [];
@@ -82,6 +85,6 @@ export async function listOrgAdminOrgIds(userId: string) {
   const rows = await db()
     .select({ orgId: schema.memberships.orgId })
     .from(schema.memberships)
-    .where(and(eq(schema.memberships.userId, userId), isNotNull(schema.memberships.orgId)));
+    .where(and(eq(schema.memberships.userId, userId), orgGrant, isNotNull(schema.memberships.orgId)));
   return rows.map((r) => r.orgId!);
 }

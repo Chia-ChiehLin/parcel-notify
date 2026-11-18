@@ -19,12 +19,23 @@ export function UnitGenerator({ slug }: { slug: string }) {
   const [preview, setPreview] = useState<{ ok: boolean; count?: number; sample?: string[]; last?: string; error?: string } | null>(null);
 
   useEffect(() => {
-    const t = setTimeout(async () => setPreview(await previewUnitsAction(slug, form)), 300);
-    return () => clearTimeout(t);
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      try {
+        const result = await previewUnitsAction(slug, form);
+        if (!cancelled) setPreview(result);
+      } catch {
+        if (!cancelled) setPreview({ ok: false, error: '無法載入預覽，請檢查連線後再試。' });
+      }
+    }, 300);
+    return () => { cancelled = true; clearTimeout(t); };
   }, [form, slug]);
 
-  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
-    setForm((f) => ({ ...f, [k]: e.target.type === 'number' ? Number(e.target.value) : e.target.value }));
+  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    const value = e.target.type === 'number' ? Number(e.target.value) : e.target.value;
+    setPreview(null);
+    setForm((f) => ({ ...f, [k]: value }));
+  };
 
   return (
     <form action={action} className="space-y-4">

@@ -1,3 +1,6 @@
+import { serviceContact } from '@/lib/env';
+import { emailGateway } from '@/channels/gateway';
+import { requirePlatformAdmin } from '@/auth/session';
 import Link from 'next/link';
 import { listCommunitiesForPlatform, GRACE_DAYS } from '@/domain/communities';
 import { platformStats } from '@/domain/stats';
@@ -11,7 +14,14 @@ export const metadata = { title: '平台總覽' };
 export const dynamic = 'force-dynamic';
 
 export default async function AdminHome() {
+  await requirePlatformAdmin();
   const [stats, rows, usage, shared] = await Promise.all([platformStats(), listCommunitiesForPlatform(), listUsageForMonth(), getSharedChannel()]);
+  const contact = serviceContact();
+  const readiness = [
+    !emailGateway().isConfigured() && '寄信服務尚未設定，請設定 Resend API 金鑰與已驗證寄件地址，並實際收取一封測試信。',
+    (!contact.operator || !contact.email) && '請補齊政策頁的營運者名稱與公開客服信箱，讓社區能洽詢服務或提出個資申請。',
+    process.env.SETUP_TOKEN && '平台管理員已建立。請從 Vercel 移除一次性設定碼 SETUP_TOKEN 並重新部署。',
+  ].filter(Boolean);
   const usageMap = new Map(usage.map((u) => [u.communityId, u]));
   const soon = dateKey(addDays(new Date(), 14));
   const expiring = rows.filter(({ community: c }) => {
@@ -24,6 +34,9 @@ export default async function AdminHome() {
   return (
     <>
       <PageHeader title="平台總覽" actions={<LinkButton variant="primary" href="/admin/communities/new">＋ 開通新社區</LinkButton>} />
+      {readiness.length > 0 && <Alert tone="info" title="開始收費前待辦" className="mb-6">
+        <ul className="list-disc space-y-1 pl-5">{readiness.map(item => <li key={String(item)}>{item}</li>)}</ul>
+      </Alert>}
       {!shared ? (
         <Alert tone="warning" title="還沒有設定共用 LINE 官方帳號" className="mb-6">
           使用「共用帳號」的社區目前無法發送 LINE 通知。<Link href="/admin/line" className="font-semibold underline">前往設定</Link>

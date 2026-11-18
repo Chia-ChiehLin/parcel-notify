@@ -87,8 +87,8 @@ export async function installRichMenu(actor: Actor, channel: ChannelRow) {
   let richMenuId: string;
   try {
     richMenuId = await lineGateway().createRichMenu(credsOf(channel), menuDefinition(), image, 'image/png');
-  } catch (e) {
-    console.error('[rich-menu] failed', e);
+  } catch {
+    console.error('[rich-menu] failed');
     throw new DomainError('建立圖文選單失敗，請確認 access token 仍然有效');
   }
   await db().update(schema.lineChannels).set({ richMenuId }).where(eq(schema.lineChannels.id, channel.id));

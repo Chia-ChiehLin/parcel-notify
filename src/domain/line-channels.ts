@@ -17,6 +17,10 @@ export function webhookUrlFor(channel: Pick<ChannelRow, 'webhookKey'>) {
   return `${appUrl()}/api/line/webhook/${channel.webhookKey}`;
 }
 
+function endpointHost(endpoint: string) {
+  return URL.canParse(endpoint) ? new URL(endpoint).hostname : '未知網域';
+}
+
 export async function getChannelByWebhookKey(key: string) {
   const [c] = await db().select().from(schema.lineChannels).where(eq(schema.lineChannels.webhookKey, key)).limit(1);
   return c ?? null;
@@ -80,6 +84,15 @@ export async function configureChannel(
   }
 
   const existing = input.communityId ? await getOwnChannel(input.communityId) : await getSharedChannelAny();
+  const webhookKey = existing?.webhookKey ?? randomToken(18);
+  const url = webhookUrlFor({ webhookKey });
+  const current = await lineGateway().getWebhook(creds);
+  if (current?.endpoint && current.endpoint !== url) {
+    throw new DomainError(`「${bot.displayName}」的 Webhook 已指向其他網址（${endpointHost(current.endpoint)}）。請先與該服務的負責人確認用途。`);
+  }
+  if (existing?.channelId && existing.channelId !== bot.userId) {
+    throw new DomainError('這組金鑰屬於不同的官方帳號。更換帳號需要另外安排住戶重新綁定。');
+  }
   const values = {
     name: input.name.trim() || bot.displayName,
     basicId: bot.basicId,
@@ -96,17 +109,16 @@ export async function configureChannel(
   } else {
     [channel] = await db()
       .insert(schema.lineChannels)
-      .values({ ...values, communityId: input.communityId, webhookKey: randomToken(18) })
+      .values({ ...values, communityId: input.communityId, webhookKey })
       .returning();
   }
 
-  const url = webhookUrlFor(channel);
   let webhookTest: ConfigureResult['webhookTest'] = null;
   try {
     await lineGateway().setWebhook(creds, url);
     webhookTest = await lineGateway().testWebhook(creds, url);
-  } catch (e) {
-    webhookTest = { success: false, detail: e instanceof Error ? e.message : String(e) };
+  } catch {
+    webhookTest = { success: false, detail: '請確認 LINE 帳號權限以及 Webhook 網址能從外部連線' };
   }
   await audit(actor, 'line.configure', {
     communityId: input.communityId,
@@ -137,4 +149,16 @@ export function lineAddFriendUrl(basicId: string) {
 
 export function lineBindUrl(basicId: string, bindCode: string) {
   return `https://line.me/R/oaMessage/${encodeURIComponent(basicId)}/?${encodeURIComponent(bindCode)}`;
+}
+
+/** 讓 LINE 向已設定的網址發出驗證請求，不更改網址或向住戶推播。 */
+export async function verifyInstalledWebhook(channel: ChannelRow) {
+  const creds = credsOf(channel);
+  const expected = webhookUrlFor(channel);
+  const current = await lineGateway().getWebhook(creds);
+  if (!current?.endpoint) throw new DomainError('LINE 尚未設定 Webhook 網址。');
+  if (current.endpoint !== expected) throw new DomainError(`LINE 目前指向另一個服務網址（${endpointHost(current.endpoint)}）。請先確認原系統用途。`);
+  if (!current.active) throw new DomainError('請到 LINE Developers 的 Messaging API 設定開啟 Use webhook。');
+  const result = await lineGateway().testWebhook(creds, expected);
+  if (!result.success) throw new DomainError('LINE 無法驗證本站 Webhook。請確認網址可公開接收 LINE 請求，並核對 Channel secret。');
 }

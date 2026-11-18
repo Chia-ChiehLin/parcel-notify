@@ -5,6 +5,7 @@ import { addBillingRecord } from '@/domain/billing';
 import { applyExpiry } from '@/domain/communities';
 import { purgeExpiredData, sendReminders } from '@/domain/maintenance';
 import { registerParcels } from '@/domain/parcels';
+import { confirmPickup } from '@/domain/pickup';
 import { bindByCode } from '@/domain/residents';
 import { dashboardStats } from '@/domain/stats';
 import { addDays } from '@/lib/time';
@@ -59,6 +60,21 @@ describe('到期與收款', () => {
 });
 
 describe('資料保留', () => {
+  it('同次交付共用簽名，刪除較早收件的包裹後其他包裹仍保有簽名', async () => {
+    const { scope, unit } = await makeCommunity({ settings: { retentionDays: 30, photoRetentionDays: 30 } });
+    const unitId = unit('A-1-1').id;
+    const { parcels } = await registerParcels(scope, [{ unitId }, { unitId }], { notify: false });
+    await db().update(schema.parcels).set({ receivedAt: addDays(new Date(), -40) }).where(eq(schema.parcels.id, parcels[0].id));
+    await confirmPickup(scope, {
+      parcelIds: parcels.map((p) => p.id), expectedUnitId: unitId, pickupName: '住戶', method: 'manual',
+      signature: { data: Buffer.from('test signature'), contentType: 'image/png', ext: 'png' },
+    });
+    expect((await purgeExpiredData()).records).toBe(1);
+    const [recent] = await db().select().from(schema.parcels);
+    const [file] = await db().select().from(schema.files);
+    expect(file.key).toBe(recent.signatureKey);
+  });
+
   it('刪除過期的照片與紀錄，待領取的包裹不刪', async () => {
     const { scope, unit } = await makeCommunity({ settings: { retentionDays: 30, photoRetentionDays: 7 } });
     const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0, 0, 0, 0, 0, 0, 0]);

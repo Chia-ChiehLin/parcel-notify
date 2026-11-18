@@ -65,3 +65,15 @@ describe('LINE webhook 處理', () => {
     expect(res.notifications[0].status).toBe('no_recipient');
   });
 });
+
+it('檢查既有官方帳號時保留其他系統正在使用的 Webhook', async () => {
+  const { configureChannel, verifyInstalledWebhook } = await import('@/domain/line-channels');
+  const { TEST_TOKEN, TEST_SECRET, ADMIN } = await import('./helpers');
+  const { channel } = await makeCommunity();
+  await verifyInstalledWebhook(channel!);
+  const other = 'https://prior.example.test/old-webhook';
+  fakes.endpoints.set(TEST_TOKEN, other);
+  await expect(verifyInstalledWebhook(channel!)).rejects.toThrow('另一個服務');
+  await expect(configureChannel(ADMIN, { communityId: null, name: '共用帳號', accessToken: TEST_TOKEN, channelSecret: TEST_SECRET })).rejects.toThrow('其他網址');
+  expect(fakes.endpoints.get(TEST_TOKEN)).toBe(other);
+});

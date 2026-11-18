@@ -10,7 +10,15 @@ import type { ActionState } from '@/components/form';
 import { run, str } from './util';
 
 function safeNext(next: string) {
-  return next.startsWith('/') && !next.startsWith('//') ? next : '/';
+  if (!next.startsWith('/')) return '/';
+  try {
+    const origin = 'https://parcel.invalid';
+    const url = new URL(next, origin);
+    if (url.origin === origin && !url.pathname.startsWith('//')) return url.pathname + url.search + url.hash;
+  } catch {
+    // 無效網址回到首頁
+  }
+  return '/';
 }
 
 export async function loginAction(_prev: ActionState, fd: FormData): Promise<ActionState> {
@@ -19,7 +27,7 @@ export async function loginAction(_prev: ActionState, fd: FormData): Promise<Act
     const { ip } = await requestMeta();
     const res = await authenticate(str(fd, 'email'), str(fd, 'password'), ip);
     if (!res.ok) return { error: res.error };
-    await startSession(res.user.id);
+    await startSession(res.user);
     await audit({ type: 'user', id: res.user.id, name: res.user.name, ip }, 'user.login', { entityType: 'user', entityId: res.user.id });
     next = safeNext(str(fd, 'next') || '/');
     return { ok: true };
@@ -37,8 +45,9 @@ export async function forgotAction(_prev: ActionState, fd: FormData): Promise<Ac
   return run(async () => {
     const email = str(fd, 'email');
     if (!email) return { error: '請輸入 Email' };
-    await requestPasswordReset(email);
-    return { ok: true, message: '如果這個 Email 有帳號，我們已寄出重設密碼的信，請在 2 小時內完成設定。' };
+    const { ip } = await requestMeta();
+    await requestPasswordReset(email, ip);
+    return { ok: true, message: '請查看此 Email 的收件匣與垃圾信件匣，重設連結有效 2 小時。若未收到，請聯絡服務商。' };
   });
 }
 
@@ -47,7 +56,7 @@ export async function resetAction(token: string, _prev: ActionState, fd: FormDat
     if (str(fd, 'password') !== str(fd, 'confirm')) return { error: '兩次輸入的密碼不一樣' };
     const res = await resetPassword(token, str(fd, 'password'));
     if (!res.ok) return { error: res.error };
-    await startSession(res.userId);
+    await startSession({ id: res.userId, passwordHash: res.passwordHash });
     return { ok: true };
   });
   if (result?.ok) redirect('/');
@@ -56,9 +65,10 @@ export async function resetAction(token: string, _prev: ActionState, fd: FormDat
 
 export async function acceptInviteAction(token: string, _prev: ActionState, fd: FormData): Promise<ActionState> {
   const result = await run(async () => {
-    const res = await acceptInvite(token, { name: str(fd, 'name'), password: str(fd, 'password') });
+    const { ip } = await requestMeta();
+    const res = await acceptInvite(token, { name: str(fd, 'name'), password: str(fd, 'password') }, ip);
     if (!res.ok) return { error: res.error };
-    await startSession(res.user.id);
+    await startSession(res.user);
     return { ok: true };
   });
   if (result?.ok) redirect('/');
@@ -73,7 +83,7 @@ export async function setupAction(_prev: ActionState, fd: FormData): Promise<Act
     if (str(fd, 'password') !== str(fd, 'confirm')) return { error: '兩次輸入的密碼不一樣' };
     const res = await createFirstPlatformAdmin({ email: str(fd, 'email'), name: str(fd, 'name'), password: str(fd, 'password') });
     if (!res.ok) return { error: res.error };
-    await startSession(res.user.id);
+    await startSession(res.user);
     return { ok: true };
   });
   if (result?.ok) redirect('/admin');

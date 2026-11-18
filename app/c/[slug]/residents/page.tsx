@@ -17,7 +17,7 @@ export default async function ResidentsPage({ params, searchParams }: { params: 
   const rows = await listResidents(ctx.community.id, { q });
   return (
     <>
-      <PageHeader title="住戶" description={`${rows.length} 位已綁定的住戶。住戶用綁定卡上的綁定碼自行綁定，不需要手動新增。`} />
+      <PageHeader title="住戶" description={`${rows.length} 位已綁定的住戶。住戶可使用綁定卡加入 LINE。只使用 Email 的住戶可請管理者在戶別頁協助加入及驗證。`} />
       <Card>
         <div className="border-b border-gray-100 px-5 py-3">
           <form>
@@ -51,7 +51,9 @@ export default async function ResidentsPage({ params, searchParams }: { params: 
                   </Td>
                   <Td className="space-x-1">
                     {r.lineUserId ? <Badge tone={r.lineFollowing && r.notifyLine ? 'green' : 'gray'}>{r.lineFollowing ? 'LINE' : '已封鎖'}</Badge> : null}
-                    {r.email ? <Badge tone={r.notifyEmail ? 'blue' : 'gray'}>Email</Badge> : null}
+                    {r.email ? <Badge tone={r.notifyEmail && r.emailVerifiedAt && r.verifiedEmail === r.email ? 'blue' : 'gray'}>
+                      {r.notifyEmail ? (r.emailVerifiedAt && r.verifiedEmail === r.email ? 'Email 已驗證' : 'Email 待驗證') : 'Email 已關閉'}
+                    </Badge> : null}
                   </Td>
                   <Td className="text-sm">{r.language === 'en' ? 'English' : '中文'}</Td>
                   <Td className="whitespace-nowrap text-sm text-gray-500">{formatDateTime(r.boundAt)}</Td>

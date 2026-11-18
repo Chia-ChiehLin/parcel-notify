@@ -73,3 +73,39 @@ describe('CSV', () => {
     expect(csv).toContain("'+1");
   });
 });
+
+describe('戶別與入住期間的一致性', () => {
+  it('同一份門牌重複送出會合併，同一戶只有一個綁定碼', async () => {
+    const { scope } = await makeCommunity();
+    const list = generateUnitList({ buildings: ['C'], floorFrom: 1, floorTo: 3, unitsPerFloor: 2, pattern: '{b}-{f}-{u}' });
+    const results = await Promise.all([createUnits(scope, list), createUnits(scope, list)]);
+    expect(results.map((row) => row.created).sort()).toEqual([0, 6]);
+    expect(results.map((row) => row.skipped).sort()).toEqual([0, 6]);
+  });
+
+  it('不同批次同時匯入只接受不超出方案的一批', async () => {
+    const { scope } = await makeCommunity({ planCode: 'basic' });
+    const batch = (name: string) => generateUnitList({ buildings: [name], floorFrom: 1, floorTo: 40, unitsPerFloor: 2, pattern: '{b}-{f}-{u}' });
+    const results = await Promise.allSettled([createUnits(scope, batch('C')), createUnits(scope, batch('D'))]);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    const units = await db().select({ id: schema.units.id }).from(schema.units).where(eq(schema.units.communityId, scope.communityId));
+    expect(units).toHaveLength(92);
+  });
+
+  it('遷出與 LINE 綁定一起處理時，最後只保留空戶與新的綁定碼', async () => {
+    const { scope, channel, unit } = await makeCommunity();
+    const previous = unit('A-1-1');
+    await Promise.all([bindByCode({ channel: channel!, lineUserId: 'U-a', code: previous.bindCode }), moveOut(scope, previous.id)]);
+    const [updated] = await db().select().from(schema.units).where(eq(schema.units.id, previous.id));
+    const members = await db().select().from(schema.residents).where(eq(schema.residents.unitId, previous.id));
+    expect(members.filter((r) => r.status === 'active')).toHaveLength(0);
+    expect(updated.status).toBe('vacant');
+    expect(updated.occupancyStartedAt).toBeInstanceOf(Date);
+    expect(updated.bindCode).not.toBe(previous.bindCode);
+  });
+
+  it('匯出地下樓層仍為數值，試算表公式形狀的字串保留為文字', () => {
+    const csv = toCsv([[-2, '  +1', '＠住戶']]);
+    expect(parseCsv(csv)).toEqual([['-2', "'  +1", "'＠住戶"]]);
+  });
+});

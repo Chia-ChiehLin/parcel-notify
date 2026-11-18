@@ -18,12 +18,14 @@ export const fakes = {
   failLineFor: new Set<string>(),
   emailConfigured: true,
   webhookUrl: '' as string,
+  endpoints: new Map<string, string>(),
   reset() {
     this.line = [];
     this.email = [];
     this.failLineFor = new Set();
     this.emailConfigured = true;
     this.webhookUrl = '';
+    this.endpoints.clear();
   },
   pushes() {
     return this.line.filter((s) => s.kind === 'push');
@@ -45,7 +47,12 @@ const fakeLine: LineGateway = {
     if (creds.accessToken.startsWith('bad')) throw new Error('401');
     return { basicId: '@testbot', displayName: '測試官方帳號', userId: 'Ubot' };
   },
-  async setWebhook(_c, url) {
+  async getWebhook(creds) {
+    const endpoint = fakes.endpoints.get(creds.accessToken);
+    return endpoint ? { endpoint, active: true } : null;
+  },
+  async setWebhook(creds, url) {
+    fakes.endpoints.set(creds.accessToken, url);
     fakes.webhookUrl = url;
   },
   async testWebhook() {

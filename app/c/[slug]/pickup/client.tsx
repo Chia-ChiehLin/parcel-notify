@@ -29,29 +29,56 @@ export function PickupClient({ slug, requireSignature, initialUnitId }: { slug: 
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const apply = (res: PickupLookup) => {
+  const [lookupProof, setLookupProof] = useState('');
+  const requestId = useRef(0);
+
+  const apply = (res: PickupLookup, proof = '') => {
     setLookup(res);
+    setLookupProof(proof);
+    setSignature(null);
+    setWantSignature(requireSignature);
+    setSelected(new Set(res.kind === 'unit' ? res.highlightParcelId ? [res.highlightParcelId] : res.parcels.map((p) => p.id) : []));
+    setPickupName(res.kind === 'unit' ? res.proxy?.name ?? '' : '');
     setError(res.kind === 'error' ? res.message : null);
-    if (res.kind === 'unit') {
-      setSelected(new Set(res.parcels.map((p) => p.id)));
-      setPickupName(res.proxy?.name ?? '');
+  };
+
+  const search = async (text: string, byUnitId = false) => {
+    if (!text.trim() || busy) return;
+    const id = ++requestId.current;
+    setBusy(true);
+    setLookup(null);
+    setError(null);
+    setDone(null);
+    try {
+      const result = byUnitId ? await lookupUnitPickupAction(slug, text) : await lookupPickupAction(slug, text);
+      if (id === requestId.current) apply(result, byUnitId ? '' : text);
+    } catch {
+      if (id === requestId.current) setError('查詢失敗，請確認網路連線後再試一次。');
+    } finally {
+      if (id === requestId.current) setBusy(false);
     }
   };
 
-  const search = async (text: string) => {
-    if (!text.trim()) return;
-    setBusy(true);
-    setDone(null);
-    apply(await lookupPickupAction(slug, text));
-    setBusy(false);
-  };
-
   useEffect(() => {
-    if (initialUnitId) lookupUnitPickupAction(slug, initialUnitId).then(apply);
+    if (!initialUnitId) return;
+    let cancelled = false;
+    const id = ++requestId.current;
+    lookupUnitPickupAction(slug, initialUnitId)
+      .then((res) => {
+        if (cancelled || id !== requestId.current) return;
+        setLookup(res);
+        if (res.kind === 'unit') setSelected(new Set(res.parcels.map((p) => p.id)));
+        if (res.kind === 'error') setError(res.message);
+      })
+      .catch(() => {
+        if (!cancelled && id === requestId.current) setError('無法載入戶別，請重新查詢。');
+      });
+    return () => { cancelled = true; };
   }, [initialUnitId, slug]);
 
   const reset = () => {
     setInput('');
+    setLookupProof('');
     setLookup(null);
     setSelected(new Set());
     setPickupName('');
@@ -65,15 +92,25 @@ export function PickupClient({ slug, requireSignature, initialUnitId }: { slug: 
     if (lookup?.kind !== 'unit' || !selected.size) return;
     const method = lookup.via === 'qr' ? 'qr' : lookup.via === 'proxy' ? 'proxy' : lookup.via === 'code' ? 'code' : 'manual';
     setBusy(true);
-    const res = await confirmPickupAction(slug, {
-      parcelIds: [...selected],
-      method,
-      residentId: lookup.resident?.id,
-      proxyCodeId: lookup.proxy?.id,
-      pickupName: pickupName || undefined,
-      signature: wantSignature ? signature : null,
-    });
-    setBusy(false);
+    let res;
+    try {
+      res = await confirmPickupAction(slug, {
+        expectedUnitId: lookup.unit.id,
+        lookupProof,
+        parcelIds: [...selected],
+        method,
+        residentId: lookup.resident?.id,
+        proxyCodeId: lookup.proxy?.id,
+        pickupName: pickupName || undefined,
+        signature: wantSignature ? signature : null,
+      });
+    } catch {
+      reset();
+      setError('無法確認交付結果，請先查閱包裹紀錄再操作。');
+      return;
+    } finally {
+      setBusy(false);
+    }
     if (res?.error) {
       setError(res.error);
       return;
@@ -101,21 +138,29 @@ export function PickupClient({ slug, requireSignature, initialUnitId }: { slug: 
               e.preventDefault();
               search(input);
             }}
-            className="flex gap-2"
+            className="grid grid-cols-[1fr_auto] gap-2 sm:flex"
           >
             <Input
               ref={inputRef}
               autoFocus
               value={input}
-              onChange={(e) => setInput(e.target.value)}
+              disabled={busy}
+              aria-label="取件碼、代領碼或門牌"
+              onChange={(e) => {
+                requestId.current++;
+                setInput(e.target.value);
+                setLookup(null);
+                setError(null);
+                setDone(null);
+              }}
               placeholder="掃描住戶 QR，或輸入取件碼／代領碼／門牌"
-              className="h-14 text-lg"
+              className="col-span-2 min-w-0 h-14 text-lg"
               autoComplete="off"
             />
             <Button type="submit" size="lg" disabled={busy}>
               查詢
             </Button>
-            <Button type="button" size="lg" variant="secondary" onClick={() => setScanning(true)}>
+            <Button type="button" size="lg" variant="secondary" disabled={busy} aria-label="開啟相機掃描取件 QR" onClick={() => setScanning(true)}>
               📷
             </Button>
           </form>
@@ -131,7 +176,7 @@ export function PickupClient({ slug, requireSignature, initialUnitId }: { slug: 
             <div className="mb-3 text-sm font-medium text-gray-700">找到多個門牌，請選擇：</div>
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
               {lookup.units.map((u) => (
-                <Button key={u.id} variant="secondary" size="lg" onClick={async () => apply(await lookupUnitPickupAction(slug, u.id))}>
+                <Button key={u.id} variant="secondary" size="lg" disabled={busy} onClick={() => search(u.id, true)}>
                   {u.label}
                 </Button>
               ))}
@@ -151,7 +196,7 @@ export function PickupClient({ slug, requireSignature, initialUnitId }: { slug: 
                 {unit.proxy ? <span className="text-gray-600">代領人：{unit.proxy.name ?? '未填'}</span> : null}
               </div>
             </div>
-            <Button variant="ghost" onClick={reset}>
+            <Button variant="ghost" disabled={busy} onClick={reset}>
               取消
             </Button>
           </div>
@@ -159,7 +204,7 @@ export function PickupClient({ slug, requireSignature, initialUnitId }: { slug: 
             <p className="px-5 py-8 text-center text-gray-500">這戶目前沒有待領取的包裹</p>
           ) : (
             <div className="divide-y divide-gray-100">
-              {unit.parcels.map((p) => {
+              {unit.parcels.filter((p) => !unit.highlightParcelId || p.id === unit.highlightParcelId).map((p) => {
                 const on = selected.has(p.id);
                 return (
                   <label key={p.id} className={cx('flex cursor-pointer items-center gap-4 px-5 py-4', on ? 'bg-brand-50/60' : '', unit.highlightParcelId === p.id ? 'ring-2 ring-inset ring-blue-400' : '')}>
@@ -206,12 +251,12 @@ export function PickupClient({ slug, requireSignature, initialUnitId }: { slug: 
               {needName || unit.via === 'proxy' ? (
                 <div>
                   <div className="mb-1 text-sm font-medium text-gray-700">{needName ? '領取人姓名（必填，請核對身分）' : '代領人姓名'}</div>
-                  <Input value={pickupName} onChange={(e) => setPickupName(e.target.value)} placeholder="例如：王小明" className="h-12 text-base" />
+                  <Input aria-label="領取人姓名" value={pickupName} onChange={(e) => setPickupName(e.target.value)} placeholder="例如：王小明" className="h-12 text-base" />
                 </div>
               ) : null}
               {!requireSignature ? (
                 <label className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" checked={wantSignature} onChange={(e) => setWantSignature(e.target.checked)} className="h-5 w-5" /> 請領取人簽名
+                  <input type="checkbox" checked={wantSignature} onChange={(e) => { setWantSignature(e.target.checked); setSignature(null); }} className="h-5 w-5" /> 請領取人簽名
                 </label>
               ) : null}
               {wantSignature ? <SignaturePad onChange={setSignature} /> : null}

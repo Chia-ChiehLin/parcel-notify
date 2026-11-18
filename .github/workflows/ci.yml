@@ -26,6 +26,8 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Check production dependency advisories
+        run: npm audit --omit=dev --audit-level=high
       - name: Create databases
         run: |
           PGPASSWORD=postgres psql -h localhost -U postgres -c 'create database parcel_test'

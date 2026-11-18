@@ -11,7 +11,7 @@ export const dynamic = 'force-dynamic';
 export async function GET(_req: Request, { params }: { params: Promise<{ key: string[] }> }) {
   const { key } = await params;
   const path = key.join('/');
-  const m = path.match(/^c\/([0-9a-f-]{36})\/(photo|signature)\/[A-Za-z0-9_-]+\.(jpg|png|webp)$/);
+  const m = path.match(/^c\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\/(photo|signature)\/[A-Za-z0-9_-]+\.(jpg|png|webp)$/);
   if (!m) return new Response('not found', { status: 404 });
   const user = await getCurrentUser();
   if (!user) return new Response('unauthorized', { status: 401 });
@@ -21,6 +21,6 @@ export async function GET(_req: Request, { params }: { params: Promise<{ key: st
   if (!file) return new Response('not found', { status: 404 });
   const body = Buffer.isBuffer(file.body) ? new Uint8Array(file.body) : file.body;
   return new Response(body, {
-    headers: { 'Content-Type': file.contentType, 'Cache-Control': 'private, max-age=3600', 'X-Content-Type-Options': 'nosniff' },
+    headers: { 'Content-Type': file.contentType, 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' },
   });
 }

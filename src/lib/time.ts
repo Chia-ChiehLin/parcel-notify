@@ -1,5 +1,11 @@
 export const TZ = 'Asia/Taipei';
 
+export function isCalendarDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString().slice(0, 10) === value;
+}
+
 /** 台灣時間的 YYYY-MM，用於每月用量統計 */
 export function monthKey(d = new Date(), timeZone = TZ): string {
   const parts = new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit' }).formatToParts(d);

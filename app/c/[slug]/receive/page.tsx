@@ -30,6 +30,8 @@ export default async function ReceivePage({ params, searchParams }: { params: Pr
   }
   return (
     <ReceiveClient
+      key={`${slug}-${ctx.user.id}`}
+      staffId={ctx.user.id}
       slug={slug}
       carriers={ctx.settings.carriers}
       locations={ctx.settings.storageLocations}

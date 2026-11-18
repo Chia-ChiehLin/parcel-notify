@@ -1,10 +1,11 @@
+import { hasRole } from '@/auth/access';
 import Link from 'next/link';
 import { requireCommunity } from '@/auth/session';
 import { listParcels } from '@/domain/parcels';
 import type { ParcelStatus } from '@/db/schema';
 import { CategoryBadges, NotifyBadge, ParcelStatusBadge } from '@/components/status';
 import { Card, EmptyState, Input, LinkButton, PageHeader, Pagination, Table, Td, Th } from '@/components/ui';
-import { addDays, formatDateTime } from '@/lib/time';
+import { addDays, formatDateTime, isCalendarDate } from '@/lib/time';
 
 export const metadata = { title: '包裹紀錄' };
 
@@ -28,9 +29,10 @@ export default async function ParcelsPage({
   const sp = await searchParams;
   const ctx = await requireCommunity(slug);
   const status = (TABS.some(([v]) => v === sp.status) ? sp.status : 'waiting') as ParcelStatus | 'overdue' | 'all';
-  const from = sp.from && /^\d{4}-\d{2}-\d{2}$/.test(sp.from) ? new Date(`${sp.from}T00:00:00+08:00`) : undefined;
-  const to = sp.to && /^\d{4}-\d{2}-\d{2}$/.test(sp.to) ? new Date(`${sp.to}T23:59:59+08:00`) : undefined;
-  const page = Math.max(1, Number(sp.page) || 1);
+  const from = sp.from && isCalendarDate(sp.from) ? new Date(`${sp.from}T00:00:00+08:00`) : undefined;
+  const to = sp.to && isCalendarDate(sp.to) ? new Date(`${sp.to}T23:59:59.999+08:00`) : undefined;
+  const requestedPage = Number(sp.page);
+  const page = Number.isSafeInteger(requestedPage) && requestedPage > 0 && requestedPage <= 10_000_000 ? requestedPage : 1;
   const { rows, total, pageSize, overdueDays } = await listParcels(ctx.community.id, { status, q: sp.q, from, to, page });
   const overdueBefore = addDays(new Date(), -overdueDays);
   const base = `/c/${slug}/parcels`;
@@ -49,9 +51,9 @@ export default async function ParcelsPage({
         actions={
           <>
             {status === 'waiting' || status === 'overdue' ? <LinkButton href={`/c/${slug}/print/slips?unbound=1`}>列印未綁定戶通知單</LinkButton> : null}
-            <a href={`${base}/export${qs({ page: undefined })}`} className="inline-flex h-10 items-center rounded-lg border border-gray-300 bg-white px-4 text-sm font-semibold shadow-sm hover:bg-gray-50">
+            {hasRole(ctx.role, 'community_admin') ? <a href={`${base}/export${qs({ page: undefined })}`} className="inline-flex h-10 items-center rounded-lg border border-gray-300 bg-white px-4 text-sm font-semibold shadow-sm hover:bg-gray-50">
               匯出 CSV
-            </a>
+            </a> : null}
           </>
         }
       />

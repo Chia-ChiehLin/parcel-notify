@@ -1,8 +1,7 @@
-import { and, asc, eq, ilike, inArray, or, sql } from 'drizzle-orm';
-import { db, schema } from '@/db';
+import { and, asc, count, eq, gt, ilike, inArray, isNull, or, sql } from 'drizzle-orm';
+import { db, schema, type DB } from '@/db';
 import { randomCode } from '@/lib/crypto';
 import { audit } from './audit';
-import { assertWithinUnitLimit } from './communities';
 import { DomainError, type Scope } from './types';
 
 export type GeneratedUnit = { building: string; floor: number | null; number: string; label: string };
@@ -41,6 +40,8 @@ export function renderLabel(pattern: string, b: string, f: number | null, u: str
 }
 
 export function generateUnitList(input: GenerateInput): GeneratedUnit[] {
+  if (input.pattern.length > 180) throw new DomainError('門牌命名規則最多 180 字元');
+  if (input.buildings.length > 3000 || (input.unitNumbers?.length ?? 0) > 3000) throw new DomainError('一次最多產生 3000 戶');
   const buildings = input.buildings.length ? input.buildings.map((b) => b.trim()) : [''];
   if (!input.pattern.includes('{u}') && !input.pattern.includes('{uu}')) {
     throw new DomainError('命名規則必須包含 {u} 或 {uu}（戶號）');
@@ -50,12 +51,15 @@ export function generateUnitList(input: GenerateInput): GeneratedUnit[] {
   }
   const from = Math.min(input.floorFrom, input.floorTo);
   const to = Math.max(input.floorFrom, input.floorTo);
+  if (![from, to].every((n) => Number.isSafeInteger(n) && Math.abs(n) <= 2147483647)) throw new DomainError('請輸入有效的整數樓層');
   if (to - from > 200) throw new DomainError('樓層範圍太大');
   const skip = new Set(input.skipFloors ?? []);
+  if (!input.unitNumbers?.length && (!Number.isSafeInteger(input.unitsPerFloor) || input.unitsPerFloor! > 3000)) throw new DomainError('每層戶數必須為 1 到 3000 的整數');
   const numbers =
     input.unitNumbers && input.unitNumbers.length
       ? input.unitNumbers.map((n) => n.trim()).filter(Boolean)
       : Array.from({ length: Math.max(0, input.unitsPerFloor ?? 0) }, (_, i) => String(i + 1));
+  if (buildings.some((b) => b.length > 180) || numbers.some((n) => n.length > 180)) throw new DomainError('棟別及戶號最多 180 字元');
   if (!numbers.length) throw new DomainError('請設定每層戶數或戶號');
 
   const out: GeneratedUnit[] = [];
@@ -66,13 +70,14 @@ export function generateUnitList(input: GenerateInput): GeneratedUnit[] {
       for (const n of numbers) {
         const label = renderLabel(input.pattern, b, f, n);
         if (!label) continue;
+        if (label.length > 180) throw new DomainError('門牌最多 180 字元');
         if (seen.has(label)) throw new DomainError(`命名規則產生了重複的門牌「${label}」，請調整規則`);
+        if (out.length >= 3000) throw new DomainError('一次最多產生 3000 戶');
         seen.add(label);
         out.push({ building: b, floor: f, number: n, label });
       }
     }
   }
-  if (out.length > 3000) throw new DomainError('一次最多產生 3000 戶');
   return out;
 }
 
@@ -92,69 +97,70 @@ function sortKeyFor(buildingOrder: number, floor: number | null, number: string)
   return `${b}|${f}|${n}`;
 }
 
-async function newBindCode(): Promise<string> {
+async function newBindCode(database: Pick<DB, 'select'> = db()): Promise<string> {
   // 31^8 ≈ 8.5 × 10^11 種組合，碰撞機率極低；仍檢查一次
   for (let i = 0; i < 5; i++) {
     const code = randomCode(8);
-    const [hit] = await db().select({ id: schema.units.id }).from(schema.units).where(eq(schema.units.bindCode, code)).limit(1);
+    const [hit] = await database.select({ id: schema.units.id }).from(schema.units).where(eq(schema.units.bindCode, code)).limit(1);
     if (!hit) return code;
   }
   throw new Error('無法產生不重複的綁定碼');
 }
 
-async function ensureBuildings(communityId: string, names: string[]) {
-  const unique = [...new Set(names.filter(Boolean))];
-  const existing = await db().select().from(schema.buildings).where(eq(schema.buildings.communityId, communityId));
-  const map = new Map(existing.map((b) => [b.name, b]));
-  let order = existing.reduce((m, b) => Math.max(m, b.sortOrder), 0);
-  for (const name of unique) {
-    if (!map.has(name)) {
-      const [b] = await db()
-        .insert(schema.buildings)
-        .values({ communityId, name, sortOrder: ++order })
-        .onConflictDoNothing()
-        .returning();
-      if (b) map.set(name, b);
-    }
-  }
-  return map;
-}
-
-/** 批次建立戶別；已存在的門牌會略過。回傳新增數量 */
+/** 建立戶別、配發綁定碼與寫入稽核在同一筆交易完成。 */
 export async function createUnits(scope: Scope, list: GeneratedUnit[], action: 'unit.generate' | 'unit.import' = 'unit.generate') {
   if (!list.length) return { created: 0, skipped: 0 };
-  const existing = await db()
-    .select({ label: schema.units.label })
-    .from(schema.units)
-    .where(and(eq(schema.units.communityId, scope.communityId), inArray(schema.units.label, list.map((u) => u.label))));
-  const existingLabels = new Set(existing.map((e) => e.label));
-  const toCreate = list.filter((u) => !existingLabels.has(u.label));
-  await assertWithinUnitLimit(scope.communityId, toCreate.length);
-  const buildingMap = await ensureBuildings(scope.communityId, toCreate.map((u) => u.building));
-
-  const rows = [];
-  for (const u of toCreate) {
-    const b = u.building ? buildingMap.get(u.building) : undefined;
-    rows.push({
-      communityId: scope.communityId,
-      buildingId: b?.id ?? null,
-      floor: u.floor,
-      number: u.number,
-      label: u.label,
-      searchKey: toSearchKey(u.label),
-      sortKey: sortKeyFor(b?.sortOrder ?? 0, u.floor, u.number),
-      bindCode: await newBindCode(),
+  if (list.length > 3000) throw new DomainError('一次最多建立 3000 戶');
+  for (const unit of list) {
+    if (unit.floor !== null && (!Number.isInteger(unit.floor) || Math.abs(unit.floor) > 2147483647)) throw new DomainError('請輸入有效的整數樓層');
+    if (!unit.label.trim() || unit.label.length > 180 || unit.building.length > 180 || unit.number.length > 180) throw new DomainError('請確認門牌不為空白，門牌、棟別及戶號均不得超過 180 字元');
+  }
+  const cid = scope.communityId;
+  return db().transaction(async (tx) => {
+    const [community] = await tx.select({ planId: schema.communities.planId }).from(schema.communities)
+      .where(eq(schema.communities.id, cid)).for('update');
+    if (!community) throw new DomainError('找不到社區');
+    const [plan] = await tx.select().from(schema.plans).where(eq(schema.plans.id, community.planId));
+    const existing = await tx.select({ label: schema.units.label }).from(schema.units)
+      .where(and(eq(schema.units.communityId, cid), inArray(schema.units.label, list.map((u) => u.label))));
+    const seen = new Set(existing.map((u) => u.label));
+    const toCreate = list.filter((u) => {
+      if (seen.has(u.label)) return false;
+      seen.add(u.label);
+      return true;
     });
-  }
-  for (let i = 0; i < rows.length; i += 500) {
-    await db().insert(schema.units).values(rows.slice(i, i + 500));
-  }
-  await audit(scope.actor, action, {
-    communityId: scope.communityId,
-    entityType: 'unit',
-    data: { created: rows.length, skipped: existingLabels.size },
+    const [current] = await tx.select({ n: count() }).from(schema.units).where(eq(schema.units.communityId, cid));
+    if (toCreate.length && current.n + toCreate.length > plan.maxUnits) {
+      throw new DomainError(`超過「${plan.name}」的戶數上限（${plan.maxUnits} 戶），請升級方案`);
+    }
+
+    const buildings = await tx.select().from(schema.buildings).where(eq(schema.buildings.communityId, cid));
+    const byName = new Map(buildings.map((b) => [b.name, b]));
+    let order = buildings.reduce((max, b) => Math.max(max, b.sortOrder), 0);
+    const missing = [...new Set(toCreate.map((u) => u.building))].filter((name) => name && !byName.has(name));
+    if (missing.length) {
+      const added = await tx.insert(schema.buildings).values(missing.map((name) => ({ communityId: cid, name, sortOrder: ++order }))).returning();
+      for (const b of added) byName.set(b.name, b);
+    }
+    for (let i = 0; i < toCreate.length; i += 500) {
+      let pending = toCreate.slice(i, i + 500);
+      for (let attempt = 0; pending.length && attempt < 5; attempt++) {
+        const rows = pending.map((u) => {
+          const b = byName.get(u.building);
+          return { communityId: cid, buildingId: b?.id, floor: u.floor, number: u.number, label: u.label,
+            searchKey: toSearchKey(u.label), sortKey: sortKeyFor(b?.sortOrder ?? 0, u.floor, u.number), bindCode: randomCode(8) };
+        });
+        const added = await tx.insert(schema.units).values(rows).onConflictDoNothing({ target: schema.units.bindCode })
+          .returning({ label: schema.units.label });
+        const inserted = new Set(added.map((u) => u.label));
+        pending = pending.filter((u) => !inserted.has(u.label));
+      }
+      if (pending.length) throw new DomainError('無法配發新的綁定碼，請再試一次');
+    }
+    const result = { created: toCreate.length, skipped: list.length - toCreate.length };
+    await audit(scope.actor, action, { communityId: cid, entityType: 'unit', data: result }, tx);
+    return result;
   });
-  return { created: rows.length, skipped: list.length - rows.length };
 }
 
 export async function createSingleUnit(scope: Scope, input: { building: string; floor: number | null; number: string; label?: string }) {
@@ -221,21 +227,26 @@ export async function rotateBindCode(scope: Scope, unitId: string) {
 
 /** 遷出：移除這戶所有住戶並更換綁定碼，舊住戶就收不到新住戶的通知 */
 export async function moveOut(scope: Scope, unitId: string) {
-  const unit = await getUnit(scope.communityId, unitId);
-  const removed = await db()
-    .update(schema.residents)
-    .set({ status: 'removed', removedAt: new Date(), tokenVersion: sql`${schema.residents.tokenVersion} + 1` })
-    .where(and(eq(schema.residents.unitId, unitId), eq(schema.residents.communityId, scope.communityId), eq(schema.residents.status, 'active')))
-    .returning({ id: schema.residents.id });
-  const code = await newBindCode();
-  await db().update(schema.units).set({ bindCode: code, bindCodeUpdatedAt: new Date() }).where(eq(schema.units.id, unitId));
-  await audit(scope.actor, 'unit.move_out', {
-    communityId: scope.communityId,
-    entityType: 'unit',
-    entityId: unitId,
-    data: { label: unit.label, removedResidents: removed.length },
+  return db().transaction(async (tx) => {
+    const matches = and(eq(schema.units.id, unitId), eq(schema.units.communityId, scope.communityId));
+    const [unit] = await tx.select().from(schema.units).where(matches).for('update');
+    if (!unit) throw new DomainError('找不到這個戶別');
+    const [waiting] = await tx.select({ id: schema.parcels.id }).from(schema.parcels)
+      .where(and(eq(schema.parcels.communityId, scope.communityId), eq(schema.parcels.unitId, unitId), eq(schema.parcels.status, 'waiting'))).limit(1);
+    if (waiting) throw new DomainError('這戶還有待領包裹，請先交付、退件或更正戶別，再辦理遷出');
+    const now = new Date();
+    const removed = await tx.update(schema.residents)
+      .set({ status: 'removed', removedAt: now, isPrimary: false, tokenVersion: sql`${schema.residents.tokenVersion} + 1` })
+      .where(and(eq(schema.residents.unitId, unitId), eq(schema.residents.communityId, scope.communityId), eq(schema.residents.status, 'active')))
+      .returning({ id: schema.residents.id });
+    await tx.update(schema.proxyCodes).set({ expiresAt: now }).where(and(eq(schema.proxyCodes.unitId, unitId),
+      eq(schema.proxyCodes.communityId, scope.communityId), isNull(schema.proxyCodes.usedAt), gt(schema.proxyCodes.expiresAt, now)));
+    await tx.update(schema.units).set({ bindCode: await newBindCode(tx), bindCodeUpdatedAt: now, occupancyStartedAt: now, status: 'vacant' }).where(matches);
+    await audit(scope.actor, 'unit.move_out', {
+      communityId: scope.communityId, entityType: 'unit', entityId: unitId, data: { label: unit.label, removedResidents: removed.length },
+    }, tx);
+    return { removed: removed.length };
   });
-  return { removed: removed.length };
 }
 
 export async function listUnits(communityId: string, opts: { q?: string; buildingId?: string; status?: 'active' | 'vacant' } = {}) {
@@ -308,6 +319,7 @@ export function parseCsv(text: string): string[][] {
       field = '';
     } else field += ch;
   }
+  if (inQuotes) throw new DomainError('CSV 引號未閉合，請確認格式');
   row.push(field);
   if (row.some((c) => c.trim() !== '')) rows.push(row);
   return rows;
@@ -317,7 +329,8 @@ export function toCsv(rows: (string | number | null | undefined)[][]): string {
   const esc = (v: string | number | null | undefined) => {
     const s = v === null || v === undefined ? '' : String(v);
     // 防止 CSV 公式注入（Excel 會執行 = + - @ 開頭的儲存格）
-    const safe = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
+    const leadingFormula = /^[=+@-]/.test(s.normalize('NFKC').trimStart()) || /^[\t\r\n]/.test(s);
+    const safe = typeof v === 'string' && leadingFormula ? `'${s}` : s;
     return /[",\n\r]/.test(safe) ? `"${safe.replaceAll('"', '""')}"` : safe;
   };
   return '﻿' + rows.map((r) => r.map(esc).join(',')).join('\r\n');
@@ -343,7 +356,7 @@ export function parseUnitsCsv(text: string): GeneratedUnit[] {
     seen.add(label);
     const floorRaw = iFloor >= 0 ? (r[iFloor] ?? '').trim() : '';
     const floor = floorRaw ? Number(floorRaw.replace(/^B/i, '-')) : null;
-    if (floorRaw && !Number.isFinite(floor)) throw new DomainError(`第 ${i + 2} 列：樓層「${floorRaw}」不是數字`);
+    if (floorRaw && (!Number.isInteger(floor) || Math.abs(floor!) > 2147483647)) throw new DomainError(`第 ${i + 2} 列：樓層「${floorRaw}」不是數字`);
     out.push({
       label,
       building: iBuilding >= 0 ? (r[iBuilding] ?? '').trim() : '',

@@ -9,7 +9,7 @@ export type ActionState = { ok?: boolean; error?: string; message?: string; data
 export function SubmitButton({ children, pendingText = '處理中…', ...props }: ComponentProps<typeof Button> & { pendingText?: string }) {
   const { pending } = useFormStatus();
   return (
-    <Button type="submit" disabled={pending || props.disabled} {...props}>
+    <Button {...props} type="submit" disabled={pending || props.disabled}>
       {pending ? pendingText : children}
     </Button>
   );

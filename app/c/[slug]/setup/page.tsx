@@ -15,7 +15,7 @@ export default async function SetupWizard({ params }: { params: Promise<{ slug: 
   const cid = ctx.community.id;
   const [[units], [staff], [residents], [parcels], resolved] = await Promise.all([
     db().select({ n: count() }).from(schema.units).where(eq(schema.units.communityId, cid)),
-    db().select({ n: count() }).from(schema.memberships).where(eq(schema.memberships.communityId, cid)),
+    db().select({ n: count() }).from(schema.memberships).where(and(eq(schema.memberships.communityId, cid), eq(schema.memberships.role, 'staff'))),
     db().select({ n: count() }).from(schema.residents).where(and(eq(schema.residents.communityId, cid), eq(schema.residents.status, 'active'))),
     db().select({ n: count() }).from(schema.parcels).where(eq(schema.parcels.communityId, cid)),
     resolveCommunityChannel(ctx.community),
@@ -25,9 +25,9 @@ export default async function SetupWizard({ params }: { params: Promise<{ slug: 
   const steps = [
     { done: !!(s.deskPhone || s.deskHours), title: '填寫管理室聯絡資訊', desc: '管理室電話與領取時間會出現在住戶的通知裡。', href: `${base}/settings`, cta: '前往設定' },
     { done: units.n > 0, title: '建立戶別', desc: '用產生器依棟別、樓層、每層戶數一次建立，或匯入 CSV。', href: `${base}/units`, cta: '建立戶別' },
-    { done: !!resolved, title: '確認 LINE 官方帳號', desc: ctx.community.lineMode === 'shared' ? '使用平台共用帳號，不需要額外設定。' : '設定社區自己的官方帳號。', href: `${base}/settings/line`, cta: '查看' },
-    { done: staff.n > 1, title: '邀請警衛／櫃台人員', desc: '每位人員用自己的帳號登入，誰收的、誰交付的都查得到。', href: `${base}/staff`, cta: '邀請人員' },
-    { done: residents.n > 0, title: '列印綁定卡給住戶', desc: '每戶一張，投入信箱。住戶用 LINE 掃描就完成綁定。', href: `${base}/print/cards`, cta: '列印綁定卡' },
+    { done: !!resolved, title: '確認 LINE 官方帳號', desc: ctx.community.lineMode === 'shared' ? (resolved ? '已連接平台共用帳號。' : '請聯絡服務商連接平台共用帳號，完成後即可使用 LINE 通知。') : '設定社區自己的官方帳號。', href: `${base}/settings/line`, cta: '查看' },
+    { done: staff.n > 0, title: '邀請警衛／櫃台人員', desc: '每位人員用自己的帳號登入，誰收的、誰交付的都查得到。', href: `${base}/staff`, cta: '邀請人員' },
+    { done: residents.n > 0, title: '完成第一戶住戶綁定', desc: '每戶一張，投入信箱。住戶用 LINE 掃描就完成綁定。', href: `${base}/print/cards`, cta: '列印綁定卡' },
     { done: parcels.n > 0, title: '登記第一件包裹', desc: '用平板開啟「收件登記」，試著登記一件包裹並確認住戶收到通知。', href: `${base}/receive`, cta: '收件登記' },
   ];
   const doneCount = steps.filter((x) => x.done).length;

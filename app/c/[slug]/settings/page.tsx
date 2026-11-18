@@ -54,7 +54,7 @@ export default async function SettingsPage({ params }: { params: Promise<{ slug:
               <div className="space-y-1">
                 <Checkbox name="notifyAllMembers" defaultChecked={s.notifyAllMembers} label="同戶所有成員都推播" hint="關閉時只推播主要聯絡人，其他成員可在 LINE 輸入「我的包裹」查詢（不計費）" />
                 <Checkbox name="notifyOnPickup" defaultChecked={s.notifyOnPickup} label="領取後推播確認訊息" hint="可防止冒領，但每次交付都會多一則推播" />
-                <Checkbox name="emailFallback" defaultChecked={s.emailFallback} label="LINE 送不到時改寄 Email" hint="住戶有填 Email 時才會寄" />
+                <Checkbox name="emailFallback" defaultChecked={s.emailFallback} label="LINE 送不到時改寄 Email" hint="僅適用已同意、已驗證信箱，並選擇「只在 LINE 無法送達時寄 Email」的住戶。" />
                 <Checkbox name="requireSignature" defaultChecked={s.requireSignature} label="交付時要求簽名" />
               </div>
             </ActionForm>

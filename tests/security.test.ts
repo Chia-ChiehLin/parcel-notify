@@ -23,7 +23,7 @@ describe('tenant 隔離', () => {
     await expect(getUnit(a.community.id, bUnit.id)).rejects.toThrow('找不到這個戶別');
     await expect(updateUnit(a.scope, bUnit.id, { label: 'HACK', status: 'active' })).rejects.toThrow();
     await expect(getParcel(a.community.id, parcels[0].id)).rejects.toThrow('找不到這件包裹');
-    await expect(confirmPickup(a.scope, { parcelIds: [parcels[0].id], method: 'manual', pickupName: 'x' })).rejects.toThrow('有包裹不存在');
+    await expect(confirmPickup(a.scope, { parcelIds: [parcels[0].id], expectedUnitId: bUnit.id, method: 'manual', pickupName: 'x' })).rejects.toThrow('有包裹不存在');
     await expect(registerParcels(a.scope, [{ unitId: bUnit.id }], { notify: false })).rejects.toThrow('戶別不存在');
 
     // 取件碼只在自己的社區查得到
@@ -79,7 +79,7 @@ describe('綁定安全', () => {
 
   it('自有官方帳號的社區，綁定碼不能在共用帳號使用', async () => {
     const { community, channel: shared, unit, scope } = await makeCommunity();
-    const own = await configureChannel(ADMIN, { communityId: community.id, name: '自有', channelSecret: TEST_SECRET.replace('0', 'f'), accessToken: TEST_TOKEN });
+    const own = await configureChannel(ADMIN, { communityId: community.id, name: '自有', channelSecret: TEST_SECRET.replace('0', 'f'), accessToken: TEST_TOKEN + 'own' });
     await db().update(schema.communities).set({ lineMode: 'own' }).where(eq(schema.communities.id, community.id));
     expect((await bindByCode({ channel: shared!, lineUserId: 'U-x', code: unit('A-1-1').bindCode })).status).toBe('wrong_channel');
     expect((await bindByCode({ channel: own.channel, lineUserId: 'U-x', code: unit('A-1-1').bindCode })).status).toBe('bound');

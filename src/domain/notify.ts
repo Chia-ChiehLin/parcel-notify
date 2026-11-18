@@ -1,4 +1,4 @@
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, lt, ne, or } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import type { NotificationKind, NotifyStatus } from '@/db/schema';
 import { emailGateway, lineGateway } from '@/channels/gateway';
@@ -20,21 +20,18 @@ export type NotifySummary = {
 };
 
 function errMessage(e: unknown) {
-  if (e && typeof e === 'object' && 'body' in e) {
-    const body = (e as { body?: unknown }).body;
-    if (typeof body === 'string') return body.slice(0, 300);
-  }
-  return e instanceof Error ? e.message.slice(0, 300) : String(e).slice(0, 300);
+  const status = e && typeof e === 'object' && 'status' in e ? Number(e.status) : null;
+  return status && Number.isInteger(status) && status >= 100 && status < 600
+    ? `通知服務回應 HTTP ${status}`
+    : '通知服務未確認送達，請查看服務狀態與額度';
 }
 
 /** 依社區設定挑出要通知的住戶 */
-export function pickRecipients(members: Resident[], settings: Pick<CommunitySettings, 'notifyAllMembers'>): Resident[] {
+function lineRecipients(members: Resident[], settings: Pick<CommunitySettings, 'notifyAllMembers'>): Resident[] {
   const active = members.filter((m) => m.status === 'active');
   if (settings.notifyAllMembers) return active;
   const primary = active.find((m) => m.isPrimary) ?? active[0];
-  // 主要聯絡人之外，自己開啟 Email 通知的成員也會收到（Email 不額外花 LINE 費用）
-  const extraEmail = active.filter((m) => m !== primary && m.notifyEmail && m.email);
-  return primary ? [primary, ...extraEmail] : extraEmail;
+  return primary ? [primary] : [];
 }
 
 function canUseLine(r: Resident, resolved: ResolvedChannel | null) {
@@ -50,19 +47,13 @@ async function record(
   parcelIds: string[],
   error?: string,
 ) {
-  await db()
-    .insert(schema.notifications)
-    .values({
-      communityId: community.id,
-      unitId,
-      residentId: resident.id,
-      channel,
-      kind,
-      parcelIds,
-      status: error ? 'failed' : 'sent',
-      error: error ?? null,
+  await db().transaction(async (tx) => {
+    await tx.insert(schema.notifications).values({
+      communityId: community.id, unitId, residentId: resident.id, channel, kind, parcelIds,
+      status: error ? 'failed' : 'sent', error: error ?? null,
     });
-  if (!error) await bumpUsage(community.id, channel === 'line' ? 'linePush' : 'email');
+    if (!error) await bumpUsage(community.id, channel === 'line' ? 'linePush' : 'email', 1, new Date(), tx);
+  });
 }
 
 /**
@@ -73,42 +64,65 @@ export async function notifyUnitParcels(
   unitId: string,
   parcelIds: string[],
   kind: 'arrival' | 'reminder' = 'arrival',
+  resend = false,
 ): Promise<NotifySummary> {
   const summary: NotifySummary = { unitId, status: 'no_recipient', line: 0, email: 0, failed: 0 };
   if (!parcelIds.length) return summary;
   const settings = parseSettings(community.settings);
 
+  const [destination] = await db().select({ unit: schema.units, features: schema.plans.features })
+    .from(schema.units).innerJoin(schema.communities, eq(schema.units.communityId, schema.communities.id))
+    .innerJoin(schema.plans, eq(schema.communities.planId, schema.plans.id))
+    .where(and(eq(schema.units.id, unitId), eq(schema.units.communityId, community.id)));
+  if (!destination) return { ...summary, status: 'skipped' };
+  const { unit, features } = destination;
+  const parcelFilter = and(
+    unit.occupancyStartedAt ? gte(schema.parcels.receivedAt, unit.occupancyStartedAt) : undefined,
+    eq(schema.parcels.communityId, community.id),
+    eq(schema.parcels.unitId, unitId),
+    eq(schema.parcels.status, 'waiting'),
+    inArray(schema.parcels.id, parcelIds),
+  );
+  const attemptAt = new Date();
+  // 領取傳送權時一併標記，兩個櫃台同時送出也只會通知一次。未完成的傳送可由人員稍後重送。
+  const parcels = kind === 'arrival'
+    ? await db().update(schema.parcels)
+        .set({ notifyStatus: 'sending', notifiedAt: attemptAt, updatedAt: attemptAt })
+        .where(and(parcelFilter, resend
+          ? or(ne(schema.parcels.notifyStatus, 'sending'), lt(schema.parcels.notifiedAt, new Date(attemptAt.getTime() - 15 * 60_000)))
+          : eq(schema.parcels.notifyStatus, 'pending')))
+        .returning()
+    : await db().select().from(schema.parcels).where(parcelFilter).orderBy(asc(schema.parcels.receivedAt));
+  if (!parcels.length) return { ...summary, status: 'skipped' };
+  const ids = parcels.map((p) => p.id);
   const finish = async (status: NotifyStatus) => {
     summary.status = status;
     if (kind === 'arrival') {
-      await db()
-        .update(schema.parcels)
+      await db().update(schema.parcels)
         .set({ notifyStatus: status, notifiedAt: status === 'sent' || status === 'partial' ? new Date() : null, updatedAt: new Date() })
-        .where(and(eq(schema.parcels.communityId, community.id), inArray(schema.parcels.id, parcelIds)));
+        .where(and(eq(schema.parcels.communityId, community.id), eq(schema.parcels.unitId, unitId), inArray(schema.parcels.id, ids),
+          eq(schema.parcels.notifyStatus, 'sending'), eq(schema.parcels.notifiedAt, attemptAt)));
     }
     return summary;
   };
-
   if (community.status === 'suspended' || community.status === 'cancelled') return finish('skipped');
-
-  const [unit] = await db().select().from(schema.units).where(and(eq(schema.units.id, unitId), eq(schema.units.communityId, community.id)));
-  if (!unit) return finish('failed');
-  const parcels = await db()
-    .select()
-    .from(schema.parcels)
-    .where(and(eq(schema.parcels.communityId, community.id), inArray(schema.parcels.id, parcelIds), eq(schema.parcels.status, 'waiting')))
-    .orderBy(asc(schema.parcels.receivedAt));
-  if (!parcels.length) return finish('skipped');
 
   const members = await db()
     .select()
     .from(schema.residents)
-    .where(and(eq(schema.residents.unitId, unitId), eq(schema.residents.status, 'active')))
+    .where(and(eq(schema.residents.communityId, community.id), eq(schema.residents.unitId, unitId), eq(schema.residents.status, 'active')))
     .orderBy(asc(schema.residents.boundAt));
-  const recipients = pickRecipients(members, settings);
+  const pushRecipients = new Set(lineRecipients(members, settings));
+  const recipients = members.filter((r) => pushRecipients.has(r) || (r.notifyEmail && r.verifiedEmail === r.email && r.emailVerifiedAt && !r.emailFallbackOnly && r.email));
   if (!recipients.length) return finish('no_recipient');
 
-  const resolved = await resolveCommunityChannel(community);
+  let resolved: ResolvedChannel | null = null;
+  let channelUnavailable = false;
+  try {
+    resolved = await resolveCommunityChannel(community);
+  } catch {
+    channelUnavailable = true;
+  }
   const summaries: ParcelSummary[] = parcels.map((p) => ({
     carrier: p.carrier,
     categories: p.categories,
@@ -117,7 +131,6 @@ export async function notifyUnitParcels(
     pickupCode: p.pickupCode,
     receivedAt: p.receivedAt,
   }));
-  const ids = parcels.map((p) => p.id);
   let attempted = 0;
 
   for (const r of recipients) {
@@ -132,38 +145,47 @@ export async function notifyUnitParcels(
       deskHours: settings.deskHours,
     };
     let delivered = false;
-    if (canUseLine(r, resolved)) {
+    if (pushRecipients.has(r) && channelUnavailable && r.lineUserId && r.notifyLine && r.lineFollowing) {
+      attempted++;
+      await record(community, unitId, r, 'line', kind, ids, '無法讀取 LINE 帳號設定');
+      summary.failed++;
+    } else if (pushRecipients.has(r) && canUseLine(r, resolved)) {
       attempted++;
       try {
         await lineGateway().push(resolved!.creds, r.lineUserId!, [arrivalFlex(ctx)]);
-        await record(community, unitId, r, 'line', kind, ids);
-        summary.line++;
         delivered = true;
       } catch (e) {
         await record(community, unitId, r, 'line', kind, ids, errMessage(e));
         summary.failed++;
       }
     }
-    const wantsEmail = !!r.email && (r.notifyEmail || (!delivered && settings.emailFallback));
-    if (!delivered && wantsEmail && emailGateway().isConfigured()) {
-      attempted++;
-      try {
-        await emailGateway().send({ to: r.email!, ...arrivalEmail(ctx) });
-        await record(community, unitId, r, 'email', kind, ids);
-        summary.email++;
-        delivered = true;
-      } catch (e) {
-        await record(community, unitId, r, 'email', kind, ids, errMessage(e));
-        summary.failed++;
-      }
-    } else if (delivered && r.notifyEmail && r.email && emailGateway().isConfigured()) {
-      // 住戶同時開啟 LINE 和 Email
-      try {
-        await emailGateway().send({ to: r.email, ...arrivalEmail(ctx) });
-        await record(community, unitId, r, 'email', kind, ids);
-        summary.email++;
-      } catch (e) {
-        await record(community, unitId, r, 'email', kind, ids, errMessage(e));
+    if (delivered) {
+      await record(community, unitId, r, 'line', kind, ids);
+      summary.line++;
+    }
+    if (features.email && r.email && r.notifyEmail && r.emailVerifiedAt && r.verifiedEmail === r.email) {
+      // Keep consent valid through dispatch. Changing the address or moving out waits for an in-flight send (bounded by the gateway timeout).
+      const email = r.email;
+      const result = await db().transaction(async (tx) => {
+        const [recipient] = await tx.select().from(schema.residents)
+          .where(and(eq(schema.residents.id, r.id), eq(schema.residents.communityId, community.id),
+            eq(schema.residents.unitId, unitId), eq(schema.residents.status, 'active'), eq(schema.residents.notifyEmail, true),
+            eq(schema.residents.email, email), eq(schema.residents.verifiedEmail, email),
+            eq(schema.residents.tokenVersion, r.tokenVersion))).for('share');
+        if (!recipient?.emailVerifiedAt || (recipient.emailFallbackOnly && (delivered || !settings.emailFallback || !pushRecipients.has(r)))) return null;
+        if (!emailGateway().isConfigured()) return { error: '尚未設定寄件服務' };
+        try {
+          await emailGateway().send({ to: email, ...arrivalEmail(ctx) });
+          return { error: undefined };
+        } catch (e) {
+          return { error: errMessage(e) };
+        }
+      });
+      if (result) {
+        attempted++;
+        await record(community, unitId, r, 'email', kind, ids, result.error);
+        if (result.error) summary.failed++;
+        else summary.email++;
       }
     }
   }
@@ -178,24 +200,32 @@ export async function notifyPickup(community: Community, unitId: string, parcelI
   const settings = parseSettings(community.settings);
   if (!settings.notifyOnPickup || !parcelIds.length) return;
   if (community.status === 'suspended' || community.status === 'cancelled') return;
-  const [unit] = await db().select().from(schema.units).where(eq(schema.units.id, unitId));
+  const [unit] = await db().select().from(schema.units).where(and(eq(schema.units.communityId, community.id), eq(schema.units.id, unitId)));
   if (!unit) return;
   const members = await db()
     .select()
     .from(schema.residents)
-    .where(and(eq(schema.residents.unitId, unitId), eq(schema.residents.status, 'active')))
+    .where(and(eq(schema.residents.communityId, community.id), eq(schema.residents.unitId, unitId), eq(schema.residents.status, 'active')))
     .orderBy(asc(schema.residents.boundAt));
-  const recipients = pickRecipients(members, settings);
+  const recipients = lineRecipients(members, settings);
   const resolved = await resolveCommunityChannel(community);
-  const rows = await db().select({ quantity: schema.parcels.quantity }).from(schema.parcels).where(inArray(schema.parcels.id, parcelIds));
+  const rows = await db().select({ id: schema.parcels.id, quantity: schema.parcels.quantity }).from(schema.parcels)
+    .where(and(eq(schema.parcels.communityId, community.id), eq(schema.parcels.unitId, unitId), eq(schema.parcels.status, 'picked_up'),
+      unit.occupancyStartedAt ? gte(schema.parcels.receivedAt, unit.occupancyStartedAt) : undefined, inArray(schema.parcels.id, parcelIds)));
+  if (!rows.length) return;
+  const ids = rows.map((row) => row.id);
   const n = rows.reduce((s, r) => s + r.quantity, 0);
+  let failures = 0;
   for (const r of recipients) {
     if (!canUseLine(r, resolved)) continue;
     try {
       await lineGateway().push(resolved!.creds, r.lineUserId!, [{ type: 'text', text: pickupText(r.language, unit.label, n, new Date(), pickedBy) }]);
-      await record(community, unitId, r, 'line', 'pickup', parcelIds);
     } catch (e) {
-      await record(community, unitId, r, 'line', 'pickup', parcelIds, errMessage(e));
+      await record(community, unitId, r, 'line', 'pickup', ids, errMessage(e));
+      failures++;
+      continue;
     }
+    await record(community, unitId, r, 'line', 'pickup', ids);
   }
+  return { failures };
 }

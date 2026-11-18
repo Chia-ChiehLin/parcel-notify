@@ -1,3 +1,4 @@
+import { requirePlatformAdmin } from '@/auth/session';
 import { desc, eq } from 'drizzle-orm';
 import { db, schema } from '@/db';
 import { AuditTable } from '@/components/audit-table';
@@ -7,6 +8,7 @@ export const metadata = { title: '稽核紀錄' };
 export const dynamic = 'force-dynamic';
 
 export default async function PlatformAuditPage() {
+  await requirePlatformAdmin();
   const rows = await db()
     .select({ log: schema.auditLogs, communityName: schema.communities.name })
     .from(schema.auditLogs)

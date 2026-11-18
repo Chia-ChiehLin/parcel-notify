@@ -1,3 +1,4 @@
+import { requirePlatformAdmin } from '@/auth/session';
 import { notFound } from 'next/navigation';
 import { eq } from 'drizzle-orm';
 import { db, schema } from '@/db';
@@ -14,6 +15,7 @@ import { addDays, dateKey, formatDate, formatDateTime } from '@/lib/time';
 export const dynamic = 'force-dynamic';
 
 export default async function CommunityDetail({ params }: { params: Promise<{ id: string }> }) {
+  await requirePlatformAdmin();
   const { id } = await params;
   if (!/^[0-9a-f-]{36}$/.test(id)) notFound();
   const data = await getCommunityWithPlan(id).catch(() => null);
@@ -181,7 +183,7 @@ export default async function CommunityDetail({ params }: { params: Promise<{ id
           ) : null}
         </Card>
 
-        <Card>
+        <Card id="staff">
           <CardHeader title="社區人員" />
           <CardBody className="space-y-4">
             <ul className="divide-y divide-gray-100 text-sm">

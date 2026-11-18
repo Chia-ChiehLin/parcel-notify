@@ -26,7 +26,7 @@ export const DEFAULT_PLANS = [
     maxUnits: 2000,
     maxStaff: 50,
     monthlyPrice: 3990,
-    features: { email: true, photos: true, sms: true, ownLine: true },
+    features: { email: true, photos: true, sms: false, ownLine: true },
     sortOrder: 3,
   },
 ];

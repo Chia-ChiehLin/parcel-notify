@@ -69,7 +69,7 @@ export default async function PrintCards({ params, searchParams }: { params: Pro
                 <div className="mt-1 text-xs text-gray-500">綁定碼</div>
                 <div className="font-mono text-xl font-bold tracking-[0.15em]">{unit.bindCode}</div>
                 <div className="mt-2 text-[10px] leading-snug text-gray-600">
-                  用 LINE 掃描 QR code，按「傳送」即完成綁定。包裹到了會馬上通知您。
+                  {qr ? '用 LINE 掃描 QR code，按「傳送」即可綁定。' : '請向管理室索取社區的 LINE 官方帳號，加入後傳送上方綁定碼。'}
                   {basicId ? <span className="block">官方帳號：{basicId}</span> : null}
                 </div>
                 <div className="mt-1 text-[9px] text-gray-400">{brandName()}・請勿將綁定碼提供給他人</div>

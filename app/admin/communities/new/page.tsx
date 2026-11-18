@@ -1,3 +1,4 @@
+import { requirePlatformAdmin } from '@/auth/session';
 import { listOrganizations, listPlans } from '@/domain/communities';
 import { PageHeader } from '@/components/ui';
 import { NewCommunityForm } from './form';
@@ -6,6 +7,7 @@ export const metadata = { title: '開通新社區' };
 export const dynamic = 'force-dynamic';
 
 export default async function NewCommunityPage() {
+  await requirePlatformAdmin();
   const [plans, orgs] = await Promise.all([listPlans(true), listOrganizations()]);
   return (
     <>

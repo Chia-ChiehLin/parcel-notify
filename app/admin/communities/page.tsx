@@ -1,3 +1,4 @@
+import { requirePlatformAdmin } from '@/auth/session';
 import Link from 'next/link';
 import { listCommunitiesForPlatform } from '@/domain/communities';
 import { CommunityStatusBadge } from '@/components/status';
@@ -8,6 +9,7 @@ export const metadata = { title: '社區客戶' };
 export const dynamic = 'force-dynamic';
 
 export default async function CommunitiesPage() {
+  await requirePlatformAdmin();
   const rows = await listCommunitiesForPlatform();
   return (
     <>

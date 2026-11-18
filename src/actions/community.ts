@@ -13,7 +13,8 @@ import {
   updateCommunitySettings,
 } from '@/domain/communities';
 import { configureChannel, getOwnChannel } from '@/domain/line-channels';
-import { addEmailResident, removeResident, setPrimary } from '@/domain/residents';
+import { confirmResidentEmail, requestResidentEmailVerification, verificationMessage } from '@/domain/resident-email';
+import { addEmailResident, removeResident, setPrimary, updateResidentPrefs } from '@/domain/residents';
 import { changeStaffRole, inviteStaff, removeStaff, revokeInvite } from '@/domain/staff';
 import { DomainError } from '@/domain/types';
 import {
@@ -28,7 +29,7 @@ import {
 } from '@/domain/units';
 import { installRichMenu } from '@/line/rich-menu';
 import type { ActionState } from '@/components/form';
-import { bool, lines, num, run, str } from './util';
+import { bool, num, run, str } from './util';
 
 async function admin(slug: string) {
   const ctx = await requireCommunity(slug, 'community_admin');
@@ -37,18 +38,25 @@ async function admin(slug: string) {
 
 // ───────────────────────────── 戶別 ─────────────────────────────
 
-export async function previewUnitsAction(slug: string, input: { buildings: string; floorFrom: number; floorTo: number; skipFloors: string; unitsPerFloor: number; unitNumbers: string; pattern: string }) {
+type GeneratorInput = { buildings: string; floorFrom: number; floorTo: number; skipFloors: string; unitsPerFloor: number; unitNumbers: string; pattern: string };
+
+function generatorList(input: GeneratorInput) {
+  const split = (value: string) => value.split(/[,，、\s]+/).filter(Boolean);
+  return generateUnitList({
+    buildings: split(input.buildings),
+    floorFrom: input.floorFrom,
+    floorTo: input.floorTo,
+    skipFloors: split(input.skipFloors).map(Number).filter(Number.isFinite),
+    unitsPerFloor: input.unitsPerFloor,
+    unitNumbers: split(input.unitNumbers),
+    pattern: input.pattern,
+  });
+}
+
+export async function previewUnitsAction(slug: string, input: GeneratorInput) {
   await admin(slug);
   try {
-    const list = generateUnitList({
-      buildings: input.buildings.split(/[,，、\s]+/).filter(Boolean),
-      floorFrom: input.floorFrom,
-      floorTo: input.floorTo,
-      skipFloors: input.skipFloors.split(/[,，、\s]+/).filter(Boolean).map(Number).filter(Number.isFinite),
-      unitsPerFloor: input.unitsPerFloor,
-      unitNumbers: input.unitNumbers.split(/[,，、\s]+/).filter(Boolean),
-      pattern: input.pattern,
-    });
+    const list = generatorList(input);
     return { ok: true as const, count: list.length, sample: list.slice(0, 12).map((u) => u.label), last: list.at(-1)?.label ?? '' };
   } catch (e) {
     return { ok: false as const, error: e instanceof Error ? e.message : '產生失敗' };
@@ -58,13 +66,13 @@ export async function previewUnitsAction(slug: string, input: { buildings: strin
 export async function generateUnitsAction(slug: string, _prev: ActionState, fd: FormData): Promise<ActionState> {
   return run(async () => {
     const { scope } = await admin(slug);
-    const list = generateUnitList({
-      buildings: lines(fd, 'buildings').flatMap((b) => b.split(/\s+/)),
+    const list = generatorList({
+      buildings: str(fd, 'buildings'),
       floorFrom: num(fd, 'floorFrom', 1),
       floorTo: num(fd, 'floorTo', 1),
-      skipFloors: lines(fd, 'skipFloors').map(Number).filter(Number.isFinite),
+      skipFloors: str(fd, 'skipFloors'),
       unitsPerFloor: num(fd, 'unitsPerFloor', 0),
-      unitNumbers: lines(fd, 'unitNumbers'),
+      unitNumbers: str(fd, 'unitNumbers'),
       pattern: str(fd, 'pattern') || '{b}-{f}-{u}',
     });
     const res = await createUnits(scope, list);
@@ -158,9 +166,41 @@ export async function addEmailResidentAction(slug: string, unitId: string, _prev
     const { scope } = await admin(slug);
     const { plan } = await getCommunityWithPlan(scope.communityId);
     if (!plan.features.email) throw new DomainError('目前方案不包含 Email 通知');
-    await addEmailResident(scope, { unitId, name: str(fd, 'name'), email: str(fd, 'email') });
+    if (!bool(fd, 'consent')) throw new DomainError('請先向住戶本人確認同意，再新增通知信箱');
+    const resident = await addEmailResident(scope, { unitId, name: str(fd, 'name'), email: str(fd, 'email') });
     revalidatePath(`/c/${slug}/units/${unitId}`);
-    return { ok: true, message: '已新增 Email 住戶' };
+    const state = await requestResidentEmailVerification({ communityId: scope.communityId, residentId: resident.id, unitId });
+    return { ok: true, message: '已新增住戶。' + verificationMessage(state) };
+  });
+}
+
+export async function correctEmailResidentAction(slug: string, unitId: string, residentId: string, _prev: ActionState, fd: FormData): Promise<ActionState> {
+  return run(async () => {
+    const { scope } = await admin(slug);
+    const result = await updateResidentPrefs(scope.communityId, residentId, {
+      actor: scope.actor, emailOnlyUnitId: unitId, tokenVersion: Number(str(fd, 'version')),
+      email: str(fd, 'email'), notifyEmail: bool(fd, 'consent'),
+    });
+    const state = result.requestCode ? await requestResidentEmailVerification({
+      communityId: scope.communityId, unitId, residentId, tokenVersion: result.resident.tokenVersion,
+    }) : null;
+    revalidatePath(`/c/${slug}/units/${unitId}`);
+    revalidatePath(`/c/${slug}/residents`);
+    return { ok: true, message: '已更新住戶通知設定。' + (state ? verificationMessage(state) : '') };
+  });
+}
+
+export async function verifyCommunityEmailAction(slug: string, unitId: string, residentId: string, _prev: ActionState, fd: FormData): Promise<ActionState> {
+  return run(async () => {
+    const { scope } = await admin(slug);
+    const target = { communityId: scope.communityId, unitId, residentId };
+    const state = str(fd, 'operation') === 'resend'
+      ? await requestResidentEmailVerification(target)
+      : await confirmResidentEmail(target, str(fd, 'code'), scope.actor);
+    revalidatePath(`/c/${slug}/units/${unitId}`);
+    revalidatePath(`/c/${slug}/residents`);
+    const message = verificationMessage(state);
+    return state === 'sent' || state === 'verified' ? { ok: true, message } : { error: message };
   });
 }
 

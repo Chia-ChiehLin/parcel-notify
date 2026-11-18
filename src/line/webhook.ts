@@ -28,7 +28,7 @@ function langOf(bindings: { resident: { language: string } }[]) {
 export async function handleLineEvents(channel: ChannelRow, creds: LineCreds, events: Event[]) {
   const results = await Promise.allSettled(events.map((e) => handleEvent(channel, creds, e)));
   for (const r of results) {
-    if (r.status === 'rejected') console.error('[line] event failed', r.reason);
+    if (r.status === 'rejected') console.error('[line] event failed');
   }
 }
 
@@ -90,7 +90,7 @@ async function handleEvent(channel: ChannelRow, creds: LineCreds, event: Event) 
   if (matches(text, COMMANDS.parcels)) {
     const groups = [];
     for (const b of bindings) {
-      const parcels = await waitingForUnit(b.community.id, b.unit.id);
+      const parcels = await waitingForUnit(b.community.id, b.unit.id, b.unit.occupancyStartedAt);
       groups.push({
         communityName: b.community.name,
         unitLabel: b.unit.label,

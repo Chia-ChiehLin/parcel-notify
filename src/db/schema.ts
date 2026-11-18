@@ -213,6 +213,8 @@ export const units = app.table(
     /** 住戶綁定碼（全平台唯一，可隨時換新） */
     bindCode: text('bind_code').notNull().unique(),
     bindCodeUpdatedAt: ts('bind_code_updated_at').notNull().defaultNow(),
+    /** 最近一次遷出的時間；住戶端只可查閱本次入住期間收件的包裹。 */
+    occupancyStartedAt: ts('occupancy_started_at'),
     status: text('status').$type<'active' | 'vacant'>().notNull().default('active'),
     note: text('note'),
     createdAt: createdAt(),
@@ -261,6 +263,9 @@ export const residents = app.table(
     isPrimary: boolean('is_primary').notNull().default(false),
     notifyLine: boolean('notify_line').notNull().default(true),
     notifyEmail: boolean('notify_email').notNull().default(false),
+    emailFallbackOnly: boolean('email_fallback_only').notNull().default(false),
+    verifiedEmail: text('verified_email'),
+    emailVerifiedAt: ts('email_verified_at'),
     language: text('language').notNull().default('zh-TW'),
     /** 換掉這個數字就能讓舊的住戶連結全部失效 */
     tokenVersion: integer('token_version').notNull().default(1),
@@ -278,6 +283,15 @@ export const residents = app.table(
   ],
 );
 
+// One outstanding, address-bound challenge per resident. Only a keyed digest is stored.
+export const residentEmailChallenges = app.table('resident_email_challenges', {
+  residentId: uuid('resident_id').primaryKey().references(() => residents.id, { onDelete: 'cascade' }),
+  email: text('email').notNull(),
+  codeHash: text('code_hash').notNull(),
+  expiresAt: ts('expires_at').notNull(),
+  tries: integer('tries').notNull().default(0),
+});
+
 export const bindAttempts = app.table(
   'bind_attempts',
   {
@@ -294,7 +308,7 @@ export const bindAttempts = app.table(
 export const PARCEL_CATEGORIES = ['cold', 'frozen', 'large', 'registered', 'document', 'fragile'] as const;
 export type ParcelCategory = (typeof PARCEL_CATEGORIES)[number];
 export type ParcelStatus = 'waiting' | 'picked_up' | 'returned' | 'cancelled';
-export type NotifyStatus = 'pending' | 'sent' | 'partial' | 'failed' | 'no_recipient' | 'skipped';
+export type NotifyStatus = 'pending' | 'sending' | 'sent' | 'partial' | 'failed' | 'no_recipient' | 'skipped';
 export type PickupMethod = 'qr' | 'code' | 'proxy' | 'manual';
 
 export const parcels = app.table(

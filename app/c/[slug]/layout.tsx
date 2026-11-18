@@ -33,6 +33,7 @@ export default async function CommunityLayout({ children, params }: { children: 
           {
             title: '管理',
             items: [
+              { href: `${base}/setup`, label: '開通設定', icon: '📋' },
               { href: `${base}/staff`, label: '人員帳號', icon: '👤' },
               { href: `${base}/settings`, label: '社區設定', icon: '⚙️', exact: true },
               { href: `${base}/settings/line`, label: 'LINE 官方帳號', icon: '💬' },

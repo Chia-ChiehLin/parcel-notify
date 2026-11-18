@@ -3,11 +3,10 @@ import { db, schema } from '@/db';
 import { purgeExpiredAuthData } from '@/auth/core';
 import { purgeOldAttempts } from '@/auth/rate-limit';
 import { addDays } from '@/lib/time';
-import { deleteFiles } from '@/storage';
 import { audit, SYSTEM_ACTOR } from './audit';
 import { applyExpiry } from './communities';
 import { notifyUnitParcels } from './notify';
-import { removePhotos } from './parcels';
+import { deleteParcelFiles, removePhotos } from './parcels';
 import { parseSettings } from './settings';
 
 /** 逾期未領提醒：每戶合併成一則 */
@@ -23,34 +22,35 @@ export async function sendReminders(now = new Date()) {
     if (s.maxReminders <= 0) continue;
     const overdueBefore = addDays(now, -s.overdueDays);
     const remindBefore = addDays(now, -s.reminderIntervalDays);
-    const due = await db()
-      .select({ id: schema.parcels.id, unitId: schema.parcels.unitId })
-      .from(schema.parcels)
-      .where(
-        and(
-          eq(schema.parcels.communityId, community.id),
-          eq(schema.parcels.status, 'waiting'),
-          lte(schema.parcels.receivedAt, overdueBefore),
-          lt(schema.parcels.reminderCount, s.maxReminders),
-          or(isNull(schema.parcels.lastRemindedAt), lte(schema.parcels.lastRemindedAt, remindBefore)),
-        ),
-      );
+    const dueFilter = and(
+      eq(schema.parcels.communityId, community.id),
+      eq(schema.parcels.status, 'waiting'),
+      lte(schema.parcels.receivedAt, overdueBefore),
+      lt(schema.parcels.reminderCount, s.maxReminders),
+      or(isNull(schema.parcels.lastRemindedAt), lte(schema.parcels.lastRemindedAt, remindBefore)),
+    );
+    const due = await db().select({ id: schema.parcels.id, unitId: schema.parcels.unitId }).from(schema.parcels).where(dueFilter);
     const byUnit = new Map<string, string[]>();
     for (const p of due) byUnit.set(p.unitId, [...(byUnit.get(p.unitId) ?? []), p.id]);
     for (const [unitId, ids] of byUnit) {
-      const result = await notifyUnitParcels(community, unitId, ids, 'reminder');
+      const claimed = await db().update(schema.parcels).set({ lastRemindedAt: now })
+        .where(and(dueFilter, eq(schema.parcels.unitId, unitId), inArray(schema.parcels.id, ids))).returning({ id: schema.parcels.id });
+      if (!claimed.length) continue;
+      const claimedIds = claimed.map((p) => p.id);
+      const result = await notifyUnitParcels(community, unitId, claimedIds, 'reminder');
+      if (result.status !== 'sent' && result.status !== 'partial') continue;
       await db()
         .update(schema.parcels)
-        .set({ reminderCount: sql`${schema.parcels.reminderCount} + 1`, lastRemindedAt: now })
-        .where(inArray(schema.parcels.id, ids));
+        .set({ reminderCount: sql`${schema.parcels.reminderCount} + 1` })
+        .where(and(eq(schema.parcels.communityId, community.id), eq(schema.parcels.unitId, unitId), eq(schema.parcels.status, 'waiting'), eq(schema.parcels.lastRemindedAt, now), inArray(schema.parcels.id, claimedIds)));
       await audit(SYSTEM_ACTOR, 'parcel.remind', {
         communityId: community.id,
         entityType: 'unit',
         entityId: unitId,
-        data: { parcelIds: ids, status: result.status },
+        data: { parcelIds: claimedIds, status: result.status },
       });
       units++;
-      parcels += ids.length;
+      parcels += claimedIds.length;
     }
   }
   return { units, parcels };
@@ -76,7 +76,7 @@ export async function purgeExpiredData(now = new Date()) {
           or(lte(schema.parcels.pickedUpAt, photoCutoff), lte(schema.parcels.closedAt, photoCutoff)),
         ),
       );
-    photos += await removePhotos(withPhotos.map((p) => p.id));
+    photos += await removePhotos(community.id, withPhotos.map((p) => p.id));
 
     // 包裹紀錄保留 retentionDays 天（待領取的不刪）
     const recordCutoff = addDays(now, -s.retentionDays);
@@ -85,10 +85,10 @@ export async function purgeExpiredData(now = new Date()) {
       .from(schema.parcels)
       .where(and(eq(schema.parcels.communityId, community.id), sql`${schema.parcels.status} <> 'waiting'`, lte(schema.parcels.receivedAt, recordCutoff)));
     if (old.length) {
-      await deleteFiles(old.flatMap((p) => [p.photoKey, p.signatureKey].filter((k): k is string => !!k)));
+      await deleteParcelFiles(community.id, old);
       const ids = old.map((p) => p.id);
       for (let i = 0; i < ids.length; i += 500) {
-        await db().delete(schema.parcels).where(inArray(schema.parcels.id, ids.slice(i, i + 500)));
+        await db().delete(schema.parcels).where(and(eq(schema.parcels.communityId, community.id), inArray(schema.parcels.id, ids.slice(i, i + 500))));
       }
       records += ids.length;
     }
@@ -116,5 +116,6 @@ export async function runDaily(now = new Date()) {
   const purged = await purgeExpiredData(now);
   await purgeExpiredAuthData();
   await purgeOldAttempts();
+  await db().delete(schema.residentEmailChallenges).where(lte(schema.residentEmailChallenges.expiresAt, now));
   return { suspended: suspended.length, reminders, purged };
 }
