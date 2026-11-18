@@ -16,7 +16,7 @@ import {
   updateCommunityPlan,
   updateOrganization,
 } from '@/domain/communities';
-import { configureChannel, getSharedChannel, verifyInstalledWebhook } from '@/domain/line-channels';
+import { configureChannel, getSavedSharedChannel, getSharedChannel, initializeSavedWebhook, verifyInstalledWebhook } from '@/domain/line-channels';
 import { installRichMenu } from '@/line/rich-menu';
 import { createResetLinkForUser, inviteByPlatform } from '@/domain/staff';
 import { DomainError } from '@/domain/types';
@@ -182,18 +182,13 @@ export async function configureSharedLineAction(_prev: ActionState, fd: FormData
   return run(async () => {
     const { actor } = await admin();
     const res = await configureChannel(actor, {
-      communityId: null,
+      communityId: null, setupWebhook: str(fd, 'webhookMode') === 'install',
       name: str(fd, 'name'),
       channelSecret: str(fd, 'channelSecret'),
       accessToken: str(fd, 'accessToken'),
     });
     revalidatePath('/admin/line');
-    return {
-      ok: true,
-      message: res.webhookTest?.success
-        ? `已連上「${res.channel.displayName}」，Webhook 已自動設定並測試成功`
-        : `已連上「${res.channel.displayName}」，但 Webhook 測試失敗：${res.webhookTest?.detail ?? '未知原因'}。請確認網站已部署，或到 LINE Developers 開啟「Use webhook」`,
-    };
+    return { ok: true, message: `已儲存「${res.channel.displayName}」（${res.channel.basicId}）。${res.setup.message}` };
   });
 }
 
@@ -230,9 +225,18 @@ export async function toggleUserStatusAction(userId: string) {
 export async function verifySharedWebhookAction(): Promise<ActionState> {
   return run(async () => {
     await admin();
-    const channel = await getSharedChannel();
+    const channel = await getSavedSharedChannel();
     if (!channel) throw new DomainError('請先設定平台共用帳號。');
     await verifyInstalledWebhook(channel);
     return { ok: true, message: 'LINE 已啟用 Webhook，本站已收到驗證請求。下一步可用測試住戶確認收件通知。' };
+  });
+}
+
+export async function initializeSharedWebhookAction(): Promise<ActionState> {
+  return run(async () => {
+    const { actor } = await admin();
+    const setup = await initializeSavedWebhook(actor, null);
+    revalidatePath('/admin/line');
+    return setup.state === 'ready' ? { ok: true, message: setup.message } : { error: setup.message };
   });
 }

@@ -12,7 +12,7 @@ export interface LineGateway {
   getBotInfo(creds: LineCreds): Promise<{ basicId: string; displayName: string; userId: string }>;
   getWebhook(creds: LineCreds): Promise<{ endpoint: string; active: boolean } | null>;
   setWebhook(creds: LineCreds, url: string): Promise<void>;
-  testWebhook(creds: LineCreds, url: string): Promise<{ success: boolean; detail?: string }>;
+  testWebhook(creds: LineCreds, url: string): Promise<{ success: boolean; statusCode: number }>;
   getProfile(creds: LineCreds, userId: string): Promise<{ displayName: string } | null>;
   getQuota(creds: LineCreds): Promise<{ limit: number | null; used: number }>;
   createRichMenu(creds: LineCreds, menu: messagingApi.RichMenuRequest, image: Buffer, contentType: string): Promise<string>;
@@ -27,6 +27,15 @@ export interface EmailGateway {
 
 // ───────────────────────────── 真實實作 ─────────────────────────────
 
+// The SDK setup methods do not expose AbortSignal. Bound every account setup request, including response-body reads.
+function lineSetupRequest(creds: LineCreds, path: 'info' | 'channel/webhook/endpoint' | 'channel/webhook/test', method = 'GET', endpoint?: string) {
+  return fetch(`https://api.line.me/v2/bot/${path}`, {
+    method, redirect: 'error', cache: 'no-store', signal: AbortSignal.timeout(8_000),
+    headers: { Authorization: `Bearer ${creds.accessToken}`, 'Content-Type': 'application/json' },
+    body: endpoint === undefined ? undefined : JSON.stringify({ endpoint }),
+  });
+}
+
 const realLine: LineGateway = {
   async push(creds, to, messages) {
     const { messagingApi } = await import('@line/bot-sdk');
@@ -39,31 +48,29 @@ const realLine: LineGateway = {
     await client.replyMessage({ replyToken, messages });
   },
   async getBotInfo(creds) {
-    const { messagingApi } = await import('@line/bot-sdk');
-    const client = new messagingApi.MessagingApiClient({ channelAccessToken: creds.accessToken });
-    const info = await client.getBotInfo();
-    return { basicId: info.basicId, displayName: info.displayName, userId: info.userId };
+    const response = await lineSetupRequest(creds, 'info');
+    if (!response.ok) throw new Error('LINE account info unavailable');
+    const { basicId, displayName, userId } = await response.json() as messagingApi.BotInfoResponse;
+    if (!basicId || !displayName || !userId) throw new Error('Invalid LINE account info');
+    return { basicId, displayName, userId };
   },
   async getWebhook(creds) {
-    const { messagingApi, HTTPFetchError } = await import('@line/bot-sdk');
-    const client = new messagingApi.MessagingApiClient({ channelAccessToken: creds.accessToken });
-    try {
-      return await client.getWebhookEndpoint();
-    } catch (error) {
-      if (error instanceof HTTPFetchError && error.status === 404) return null;
-      throw error;
-    }
+    const response = await lineSetupRequest(creds, 'channel/webhook/endpoint');
+    if (response.status === 404) return null;
+    if (!response.ok) throw new Error('LINE webhook unavailable');
+    const result = await response.json() as messagingApi.GetWebhookEndpointResponse;
+    if (typeof result.endpoint !== 'string' || typeof result.active !== 'boolean') throw new Error('Invalid LINE webhook response');
+    return result;
   },
   async setWebhook(creds, url) {
-    const { messagingApi } = await import('@line/bot-sdk');
-    const client = new messagingApi.MessagingApiClient({ channelAccessToken: creds.accessToken });
-    await client.setWebhookEndpoint({ endpoint: url });
+    const response = await lineSetupRequest(creds, 'channel/webhook/endpoint', 'PUT', url);
+    if (!response.ok) throw new Error('LINE webhook update not confirmed');
   },
   async testWebhook(creds, url) {
-    const { messagingApi } = await import('@line/bot-sdk');
-    const client = new messagingApi.MessagingApiClient({ channelAccessToken: creds.accessToken });
-    const res = await client.testWebhookEndpoint({ endpoint: url });
-    return { success: res.success ?? false, detail: res.detail ?? res.reason };
+    const response = await lineSetupRequest(creds, 'channel/webhook/test', 'POST', url);
+    if (!response.ok) throw new Error('LINE webhook test unavailable');
+    const result = await response.json() as messagingApi.TestWebhookEndpointResponse;
+    return { success: result.success === true, statusCode: result.statusCode };
   },
   async getProfile(creds, userId) {
     const { messagingApi } = await import('@line/bot-sdk');

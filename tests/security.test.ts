@@ -79,7 +79,7 @@ describe('綁定安全', () => {
 
   it('自有官方帳號的社區，綁定碼不能在共用帳號使用', async () => {
     const { community, channel: shared, unit, scope } = await makeCommunity();
-    const own = await configureChannel(ADMIN, { communityId: community.id, name: '自有', channelSecret: TEST_SECRET.replace('0', 'f'), accessToken: TEST_TOKEN + 'own' });
+    const own = await configureChannel(ADMIN, { communityId: community.id, name: '自有', channelSecret: TEST_SECRET.replace('0', 'f'), accessToken: TEST_TOKEN + 'own', setupWebhook: true });
     await db().update(schema.communities).set({ lineMode: 'own' }).where(eq(schema.communities.id, community.id));
     expect((await bindByCode({ channel: shared!, lineUserId: 'U-x', code: unit('A-1-1').bindCode })).status).toBe('wrong_channel');
     expect((await bindByCode({ channel: own.channel, lineUserId: 'U-x', code: unit('A-1-1').bindCode })).status).toBe('bound');

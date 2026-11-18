@@ -69,6 +69,7 @@ export const AUDIT_ACTION_LABELS: Record<string, string> = {
   'staff.invite': '邀請人員',
   'staff.remove': '移除人員',
   'staff.role': '變更人員角色',
+  'line.webhook': '設定 LINE Webhook',
   'line.configure': '設定 LINE 官方帳號',
   'line.rich_menu': '建立圖文選單',
   'billing.record': '新增收款紀錄',

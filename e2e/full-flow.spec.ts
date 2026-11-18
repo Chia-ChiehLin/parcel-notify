@@ -2,13 +2,11 @@ import crypto from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { expect, test } from '@playwright/test';
 import { Client } from 'pg';
-import { E2E_DATABASE_URL, E2E_SECRET, E2E_SETUP_TOKEN } from '../playwright.config';
+import { E2E_DATABASE_URL, E2E_LINE_SECRET, E2E_SECRET, E2E_SETUP_TOKEN } from '../playwright.config';
 
 // 用和伺服器相同的 APP_SECRET 產生加密金鑰、住戶連結
 process.env.APP_SECRET = E2E_SECRET;
 process.env.DATABASE_URL = E2E_DATABASE_URL;
-
-const LINE_SECRET = '0123456789abcdef0123456789abcdef';
 
 async function sql<T = Record<string, unknown>>(q: string, params: unknown[] = []): Promise<T[]> {
   const c = new Client({ connectionString: E2E_DATABASE_URL });
@@ -60,14 +58,19 @@ test('平台開通社區 → 產生戶別 → LINE 綁定 → 收件 → 交付 
   await page.getByRole('button', { name: '產生戶別' }).click();
   await expect(page.getByText('已新增 128 戶')).toBeVisible();
 
-  // 4. 設定共用 LINE 帳號（直接寫入資料庫，因為測試環境不能連 LINE）
-  const { encrypt } = await import('../src/lib/crypto');
-  const webhookKey = crypto.randomBytes(12).toString('hex');
-  await sql(
-    `insert into app.line_channels (community_id, name, basic_id, display_name, secret_enc, token_enc, webhook_key, verified_at)
-     values (null, '測試共用帳號', '@e2etest', '測試共用帳號', $1, $2, $3, now())`,
-    [encrypt(LINE_SECRET), encrypt('fake-token'.repeat(20)), webhookKey],
-  );
+  // 4. 儲存帳號，再讓模擬 LINE 對本機服務發送帶有正確簽章的驗證事件。
+  await page.goto('/admin/line');
+  await page.getByLabel(/Channel secret/).fill(E2E_LINE_SECRET);
+  await page.getByLabel(/Channel access token/).fill('fake-token'.repeat(20));
+  await expect(page.getByLabel(/Webhook 設定方式/)).toHaveValue('save');
+  await page.getByRole('button', { name: '儲存帳號' }).click();
+  await expect(page.getByText('已儲存帳號', { exact: true })).toBeVisible();
+  await page.goto('/admin');
+  await expect(page.getByText('共用 LINE 帳號已儲存，等待啟用 Webhook')).toBeVisible();
+  await page.goto('/admin/line');
+  await page.getByRole('button', { name: '測試並設定本站 Webhook' }).click();
+  await expect.poll(async () => (await sql('select id from app.line_channels where is_active and verified_at is not null')).length).toBe(1);
+  const [{ webhook_key: webhookKey }] = await sql<{ webhook_key: string }>('select webhook_key from app.line_channels where community_id is null');
   const [unit] = await sql<{ id: string; bind_code: string }>(`select id, bind_code from app.units where label = 'A-14-1'`);
 
   // 4a. 簽章錯誤 → 401
@@ -90,7 +93,7 @@ test('平台開通社區 → 產生戶別 → LINE 綁定 → 收件 → 交付 
       },
     ],
   });
-  const signature = crypto.createHmac('sha256', LINE_SECRET).update(body).digest('base64');
+  const signature = crypto.createHmac('sha256', E2E_LINE_SECRET).update(body).digest('base64');
   const ok = await request.post(`/api/line/webhook/${webhookKey}`, { data: body, headers: { 'content-type': 'application/json', 'x-line-signature': signature } });
   expect(ok.status()).toBe(200);
   await expect.poll(async () => (await sql(`select id from app.residents where line_user_id = 'U-e2e-resident'`)).length, { timeout: 10_000 }).toBe(1);

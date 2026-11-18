@@ -13,7 +13,7 @@ export const dynamic = 'force-dynamic';
 export async function POST(req: Request, { params }: { params: Promise<{ key: string }> }) {
   const { key } = await params;
   const channel = await getChannelByWebhookKey(key);
-  if (!channel || !channel.isActive) return new Response('not found', { status: 404 });
+  if (!channel) return new Response('not found', { status: 404 });
 
   const signature = req.headers.get('x-line-signature');
   const body = await req.text();
@@ -24,12 +24,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ key: st
 
   let events: webhook.Event[] = [];
   try {
-    events = (JSON.parse(body) as webhook.CallbackRequest).events ?? [];
+    const request = JSON.parse(body) as webhook.CallbackRequest;
+    if (!Array.isArray(request?.events)) return new Response('invalid body', { status: 400 });
+    events = request.events;
   } catch {
     return new Response('invalid body', { status: 400 });
   }
 
   // 先回 200 給 LINE（避免逾時重送），回應後再處理事件
+  if (events.length && !channel.isActive) return new Response('channel pending', { status: 409 });
   if (events.length) after(() => handleLineEvents(channel, creds, events));
   return new Response(null, { status: 200 });
 }

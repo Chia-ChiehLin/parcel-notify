@@ -12,7 +12,7 @@ import {
   updateCommunityProfile,
   updateCommunitySettings,
 } from '@/domain/communities';
-import { configureChannel, getOwnChannel } from '@/domain/line-channels';
+import { configureChannel, getOwnChannel, initializeSavedWebhook } from '@/domain/line-channels';
 import { confirmResidentEmail, requestResidentEmailVerification, verificationMessage } from '@/domain/resident-email';
 import { addEmailResident, removeResident, setPrimary, updateResidentPrefs } from '@/domain/residents';
 import { changeStaffRole, inviteStaff, removeStaff, revokeInvite } from '@/domain/staff';
@@ -296,7 +296,7 @@ export async function setLineModeAction(slug: string, mode: LineMode): Promise<A
     if (mode === 'own') {
       const { plan } = await getCommunityWithPlan(scope.communityId);
       if (!plan.features.ownLine && ctx.role !== 'platform_admin') throw new DomainError('目前方案不包含自有 LINE 帳號，請升級方案');
-      if (!(await getOwnChannel(scope.communityId))) throw new DomainError('請先在下方設定社區自己的官方帳號');
+      if (!(await getOwnChannel(scope.communityId))?.isActive) throw new DomainError('請先完成社區自有帳號的 Webhook 測試與啟用');
     }
     await setLineMode(scope.actor, scope.communityId, mode);
     revalidatePath(`/c/${slug}/settings/line`);
@@ -313,18 +313,24 @@ export async function configureOwnLineAction(slug: string, _prev: ActionState, f
     const { plan } = await getCommunityWithPlan(scope.communityId);
     if (!plan.features.ownLine && ctx.role !== 'platform_admin') throw new DomainError('目前方案不包含自有 LINE 帳號，請升級方案');
     const res = await configureChannel(scope.actor, {
-      communityId: scope.communityId,
+      communityId: scope.communityId, setupWebhook: str(fd, 'webhookMode') === 'install',
       name: str(fd, 'name') || ctx.community.name,
       channelSecret: str(fd, 'channelSecret'),
       accessToken: str(fd, 'accessToken'),
     });
     revalidatePath(`/c/${slug}/settings/line`);
-    return {
-      ok: true,
-      message: res.webhookTest?.success
-        ? `已連上「${res.channel.displayName}」，Webhook 已自動設定並測試成功。確認無誤後，請在上方切換為「使用社區自己的帳號」。`
-        : `已連上「${res.channel.displayName}」，但 Webhook 測試失敗：${res.webhookTest?.detail ?? '未知原因'}`,
-    };
+    return { ok: true, message: `已儲存「${res.channel.displayName}」（${res.channel.basicId}）。${res.setup.message}` };
+  });
+}
+
+export async function initializeOwnWebhookAction(slug: string): Promise<ActionState> {
+  return run(async () => {
+    const { ctx, scope } = await admin(slug);
+    const { plan } = await getCommunityWithPlan(scope.communityId);
+    if (!plan.features.ownLine && ctx.role !== 'platform_admin') throw new DomainError('目前方案不包含自有 LINE 帳號');
+    const setup = await initializeSavedWebhook(scope.actor, scope.communityId);
+    revalidatePath(`/c/${slug}/settings/line`);
+    return setup.state === 'ready' ? { ok: true, message: setup.message } : { error: setup.message };
   });
 }
 

@@ -1,4 +1,5 @@
 import { eq } from 'drizzle-orm';
+import { createHash } from 'node:crypto';
 import { db, schema } from '@/db';
 import { setGateways, type EmailGateway, type EmailMessage, type LineGateway, type LineMessage } from '@/channels/gateway';
 import type { Actor } from '@/domain/audit';
@@ -19,6 +20,10 @@ export const fakes = {
   emailConfigured: true,
   webhookUrl: '' as string,
   endpoints: new Map<string, string>(),
+  webhookCalls: [] as { op: 'get' | 'set' | 'test'; url?: string }[],
+  webhookResult: { success: true, statusCode: 200 },
+  webhookActive: true,
+  afterCandidateTest: undefined as undefined | ((token: string) => void),
   reset() {
     this.line = [];
     this.email = [];
@@ -26,6 +31,10 @@ export const fakes = {
     this.emailConfigured = true;
     this.webhookUrl = '';
     this.endpoints.clear();
+    this.webhookCalls = [];
+    this.webhookResult = { success: true, statusCode: 200 };
+    this.webhookActive = true;
+    this.afterCandidateTest = undefined;
   },
   pushes() {
     return this.line.filter((s) => s.kind === 'push');
@@ -45,18 +54,22 @@ const fakeLine: LineGateway = {
   },
   async getBotInfo(creds) {
     if (creds.accessToken.startsWith('bad')) throw new Error('401');
-    return { basicId: '@testbot', displayName: '測試官方帳號', userId: 'Ubot' };
+    return { basicId: '@testbot', displayName: '測試官方帳號', userId: 'U' + createHash('sha256').update(creds.accessToken).digest('hex').slice(0, 32) };
   },
   async getWebhook(creds) {
+    fakes.webhookCalls.push({ op: 'get' });
     const endpoint = fakes.endpoints.get(creds.accessToken);
-    return endpoint ? { endpoint, active: true } : null;
+    return endpoint ? { endpoint, active: fakes.webhookActive } : null;
   },
   async setWebhook(creds, url) {
+    fakes.webhookCalls.push({ op: 'set', url });
     fakes.endpoints.set(creds.accessToken, url);
     fakes.webhookUrl = url;
   },
-  async testWebhook() {
-    return { success: true };
+  async testWebhook(creds, url) {
+    fakes.webhookCalls.push({ op: 'test', url });
+    fakes.afterCandidateTest?.(creds.accessToken);
+    return fakes.webhookResult;
   },
   async getProfile(_c, userId) {
     return { displayName: `User ${userId.slice(-4)}` };
@@ -100,7 +113,7 @@ export async function makeCommunity(opts: { slug?: string; settings?: Partial<Co
   let channel = null;
   if (opts.withChannel !== false) {
     const existing = await db().select().from(schema.lineChannels);
-    channel = existing.find((c) => c.communityId === null) ?? (await configureChannel(ADMIN, { communityId: null, name: '共用帳號', channelSecret: TEST_SECRET, accessToken: TEST_TOKEN })).channel;
+    channel = existing.find((c) => c.communityId === null) ?? (await configureChannel(ADMIN, { communityId: null, name: '共用帳號', channelSecret: TEST_SECRET, accessToken: TEST_TOKEN, setupWebhook: true })).channel;
   }
   const [fresh] = await db().select().from(schema.communities).where(eq(schema.communities.id, community.id));
   const units = await db().select().from(schema.units).where(eq(schema.units.communityId, community.id));

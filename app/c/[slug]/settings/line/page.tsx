@@ -1,5 +1,5 @@
 import { requireCommunity } from '@/auth/session';
-import { configureOwnLineAction, installOwnRichMenuAction, setLineModeAction } from '@/actions/community';
+import { configureOwnLineAction, initializeOwnWebhookAction, installOwnRichMenuAction, setLineModeAction } from '@/actions/community';
 import { getCommunityWithPlan } from '@/domain/communities';
 import { credsOf, getChannelQuota, getOwnChannel, getSharedChannel, lineAddFriendUrl, webhookUrlFor } from '@/domain/line-channels';
 import { LineSetupForm } from '@/components/line-setup';
@@ -13,7 +13,7 @@ export default async function LineSettings({ params }: { params: Promise<{ slug:
   const ctx = await requireCommunity(slug, 'community_admin');
   const [{ plan }, own, shared] = await Promise.all([getCommunityWithPlan(ctx.community.id), getOwnChannel(ctx.community.id), getSharedChannel()]);
   const mode = ctx.community.lineMode;
-  const active = mode === 'own' ? own : mode === 'shared' ? shared : null;
+  const active = mode === 'own' ? (own?.isActive ? own : null) : mode === 'shared' ? shared : null;
   const quota = active ? await getChannelQuota({ channel: active, creds: credsOf(active) }) : null;
   const canOwn = plan.features.ownLine || ctx.role === 'platform_admin';
 
@@ -47,7 +47,7 @@ export default async function LineSettings({ params }: { params: Promise<{ slug:
                 改用平台共用帳號
               </StateButton>
             ) : null}
-            {mode !== 'own' && own ? (
+            {mode !== 'own' && own?.isActive ? (
               <StateButton action={setLineModeAction.bind(null, slug, 'own')} variant="primary" confirm="切換後，住戶需要加入社區自己的官方帳號並重新輸入綁定碼才會收到通知。確定切換？">
                 改用社區自己的帳號
               </StateButton>
@@ -67,7 +67,7 @@ export default async function LineSettings({ params }: { params: Promise<{ slug:
                 <div className="grid gap-4 rounded-lg bg-gray-50 p-4 text-sm md:grid-cols-2">
                   <div>
                     <div>
-                      <span className="text-gray-500">帳號：</span>
+                      <span className="text-gray-500">已儲存帳號：</span>
                       {own.displayName}（{own.basicId}）
                     </div>
                     <div className="mt-1 break-all">
@@ -76,7 +76,8 @@ export default async function LineSettings({ params }: { params: Promise<{ slug:
                     </div>
                   </div>
                   <div>
-                    <StateButton action={installOwnRichMenuAction.bind(null, slug)}>{own.richMenuId ? '重新建立圖文選單' : '建立圖文選單'}</StateButton>
+                    <StateButton action={initializeOwnWebhookAction.bind(null, slug)}>測試並設定本站 Webhook</StateButton>
+                    {own.isActive ? <StateButton action={installOwnRichMenuAction.bind(null, slug)}>{own.richMenuId ? '重新建立圖文選單' : '建立圖文選單'}</StateButton> : null}
                   </div>
                 </div>
               ) : null}

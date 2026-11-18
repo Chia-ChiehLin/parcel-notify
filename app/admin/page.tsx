@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { listCommunitiesForPlatform, GRACE_DAYS } from '@/domain/communities';
 import { platformStats } from '@/domain/stats';
 import { listUsageForMonth } from '@/domain/usage';
-import { getSharedChannel } from '@/domain/line-channels';
+import { getSavedSharedChannel } from '@/domain/line-channels';
 import { CommunityStatusBadge } from '@/components/status';
 import { Alert, Card, CardHeader, LinkButton, PageHeader, Stat, Table, Td, Th } from '@/components/ui';
 import { addDays, dateKey, formatDate } from '@/lib/time';
@@ -15,7 +15,7 @@ export const dynamic = 'force-dynamic';
 
 export default async function AdminHome() {
   await requirePlatformAdmin();
-  const [stats, rows, usage, shared] = await Promise.all([platformStats(), listCommunitiesForPlatform(), listUsageForMonth(), getSharedChannel()]);
+  const [stats, rows, usage, shared] = await Promise.all([platformStats(), listCommunitiesForPlatform(), listUsageForMonth(), getSavedSharedChannel()]);
   const contact = serviceContact();
   const readiness = [
     !emailGateway().isConfigured() && '寄信服務尚未設定，請設定 Resend API 金鑰與已驗證寄件地址，並實際收取一封測試信。',
@@ -37,9 +37,12 @@ export default async function AdminHome() {
       {readiness.length > 0 && <Alert tone="info" title="開始收費前待辦" className="mb-6">
         <ul className="list-disc space-y-1 pl-5">{readiness.map(item => <li key={String(item)}>{item}</li>)}</ul>
       </Alert>}
-      {!shared ? (
-        <Alert tone="warning" title="還沒有設定共用 LINE 官方帳號" className="mb-6">
-          使用「共用帳號」的社區目前無法發送 LINE 通知。<Link href="/admin/line" className="font-semibold underline">前往設定</Link>
+      {!shared?.isActive ? (
+        <Alert tone="warning" title={shared ? '共用 LINE 帳號已儲存，等待啟用 Webhook' : '還沒有設定共用 LINE 官方帳號'} className="mb-6">
+          {shared
+            ? `已儲存「${shared.displayName ?? shared.name}」。請從 LINE 可以連入的網站測試並設定 Webhook。`
+            : '使用「共用帳號」的社區目前無法發送 LINE 通知。'}
+          {' '}<Link href="/admin/line" className="font-semibold underline">前往設定</Link>
         </Alert>
       ) : null}
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
