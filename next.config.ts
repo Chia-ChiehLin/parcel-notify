@@ -11,6 +11,8 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
+  // 專案根目錄就是這個資料夾（避免上層目錄有 package-lock.json 時 Next.js 誤判）
+  outputFileTracingRoot: process.cwd(),
   serverExternalPackages: ['@node-rs/argon2'],
   experimental: {
     serverActions: {
