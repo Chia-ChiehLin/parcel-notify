@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { emailGateway, lineGateway, resetGateways, setGateways } from '@/channels/gateway';
+import { configureChannel } from '@/domain/line-channels';
+import { installRichMenu } from '@/line/rich-menu';
+import { ADMIN, TEST_SECRET, TEST_TOKEN } from './helpers';
 
 const previous = { line: lineGateway(), email: emailGateway() };
 const lookup = '/v2/bot/user/all/richmenu';
@@ -61,5 +64,25 @@ describe('LINE 預設圖文選單', () => {
     const calls = lineResponses([404, reply]);
     await expect(install(null)).rejects.toThrow();
     expect(calls).toEqual(['GET ' + lookup, 'POST ' + create, 'POST ' + upload, 'GET ' + lookup]);
+  });
+
+  it('不連外下載字型或圖示，即可從正式入口上傳符合 LINE 規格的隨版 PNG', async () => {
+    const fetch = vi.fn().mockRejectedValue(new Error('測試停用對外連線'));
+    vi.stubGlobal('fetch', fetch);
+    setGateways(previous);
+    const { channel } = await configureChannel(ADMIN, {
+      communityId: null, name: '共用帳號', channelSecret: TEST_SECRET, accessToken: TEST_TOKEN, setupWebhook: true,
+    });
+    const upload = vi.fn(previous.line.createRichMenu.bind(previous.line));
+    setGateways({ line: { ...previous.line, createRichMenu: upload }, email: previous.email });
+    await installRichMenu(ADMIN, channel);
+    expect(upload).toHaveBeenCalledTimes(1);
+    const [, menu, image, contentType] = upload.mock.calls[0];
+    expect(contentType).toBe('image/png');
+    expect(image.subarray(0, 8)).toEqual(Buffer.from('89504e470d0a1a0a', 'hex'));
+    expect([image.readUInt32BE(16), image.readUInt32BE(20)]).toEqual([2500, 843]);
+    expect(image.length).toBeLessThan(1_000_000);
+    expect(menu.areas?.map((area) => area.bounds)).toEqual([0, 625, 1250, 1875].map((x) => ({ x, y: 0, width: 625, height: 843 })));
+    expect(fetch).not.toHaveBeenCalled();
   });
 });
