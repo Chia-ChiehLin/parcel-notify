@@ -1,6 +1,6 @@
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { db, schema } from '@/db';
-import { lineGateway, type LineCreds } from '@/channels/gateway';
+import { lineGateway, LineSetupError, type LineCreds } from '@/channels/gateway';
 import { decrypt, encrypt, randomToken } from '@/lib/crypto';
 import { appUrl } from '@/lib/env';
 import { audit, type Actor } from './audit';
@@ -10,7 +10,11 @@ export type ChannelRow = typeof schema.lineChannels.$inferSelect;
 export type ResolvedChannel = { channel: ChannelRow; creds: LineCreds };
 
 export function credsOf(channel: ChannelRow): LineCreds {
-  return { accessToken: decrypt(channel.tokenEnc), secret: decrypt(channel.secretEnc) };
+  try {
+    return { accessToken: decrypt(channel.tokenEnc), secret: decrypt(channel.secretEnc) };
+  } catch {
+    throw new DomainError('本站無法解密已儲存的 LINE 憑證，請由服務商核對部署的 APP_SECRET 與資料庫是否配對。');
+  }
 }
 
 export function webhookUrlFor(channel: Pick<ChannelRow, 'webhookKey'>) {
@@ -67,16 +71,32 @@ function checkDestination(current: { endpoint: string } | null, expected: string
   }
 }
 
+function setupError(stage: string, error: unknown) {
+  return new DomainError(`${stage}時，${error instanceof LineSetupError ? error.message : '未能取得 LINE API 的確認，請稍後重試。'}`);
+}
+
 async function currentWebhook(creds: LineCreds) {
   try {
     return await lineGateway().getWebhook(creds);
-  } catch {
-    throw new DomainError('無法從 LINE 取得目前的 Webhook 設定，請確認帳號權限後重試。');
+  } catch (error) {
+    throw setupError('讀取 LINE Webhook 設定', error);
   }
 }
 
-function passed(result: { success: boolean; statusCode: number }) {
-  return result.success && result.statusCode === 200;
+async function testSiteWebhook(creds: LineCreds, url: string) {
+  let result;
+  try {
+    result = await lineGateway().testWebhook(creds, url);
+  } catch (error) {
+    throw setupError('請 LINE 測試本站網址', error);
+  }
+  const status = result.statusCode;
+  if (result.success && status === 200) return;
+  if (status <= 0) throw new DomainError('LINE 測試時未收到本站的 HTTP 回應，請確認網址可由外部連線後重試。');
+  if (status === 401 || status === 403) {
+    throw new DomainError(`LINE 測試時，本站拒絕了驗證請求（HTTP ${status}）。請核對部署存取保護與此官方帳號的 Channel secret。`);
+  }
+  throw new DomainError(`LINE 測試本站網址未通過（本站回應 HTTP ${status}）。請核對 Webhook 路徑、部署狀態後重試。`);
 }
 
 /** Verify the candidate first. LINE does not offer a compare-and-swap, so re-read the current endpoint immediately before a write. */
@@ -85,11 +105,7 @@ async function installCandidate(channel: ChannelRow): Promise<WebhookSetup> {
   const url = webhookUrlFor(channel);
   try {
     checkDestination(await currentWebhook(creds), url);
-    const result = await lineGateway().testWebhook(creds, url);
-    if (!passed(result)) {
-      const http = result.statusCode > 0 ? `（HTTP ${result.statusCode}）` : '';
-      return { state: 'waiting', message: `LINE 無法驗證本站網址${http}，此次未切換 Webhook。請確認 Channel secret，並從 LINE 能公開連入的 HTTPS 網站重試。` };
-    }
+    await testSiteWebhook(creds, url);
     const latest = await currentWebhook(creds);
     checkDestination(latest, url);
     if (latest?.endpoint === url) {
@@ -144,8 +160,8 @@ export async function configureChannel(
   let bot: { basicId: string; displayName: string; userId: string };
   try {
     bot = await lineGateway().getBotInfo(creds);
-  } catch {
-    throw new DomainError('無法用這組 access token 連上 LINE，請核對官方帳號與長期 Channel access token');
+  } catch (error) {
+    throw setupError('讀取 LINE 官方帳號資料', error);
   }
 
   const channel = await db().transaction(async (tx) => {
@@ -184,11 +200,13 @@ export async function getSavedSharedChannel() {
   return c ?? null;
 }
 
-export async function getChannelQuota(resolved: ResolvedChannel) {
+export async function channelQuotaSummary(channel: ChannelRow): Promise<string> {
   try {
-    return await lineGateway().getQuota(resolved.creds);
-  } catch {
-    return null;
+    const quota = await lineGateway().getQuota(credsOf(channel));
+    return `${quota.used} / ${quota.limit ?? '無上限'} 則`;
+  } catch (error) {
+    if (error instanceof DomainError) return error.message;
+    return setupError('查詢訊息用量', error).message;
   }
 }
 
@@ -205,10 +223,9 @@ export function lineBindUrl(basicId: string, bindCode: string) {
 export async function verifyInstalledWebhook(channel: ChannelRow) {
   const creds = credsOf(channel);
   const expected = webhookUrlFor(channel);
-  const current = await lineGateway().getWebhook(creds);
+  const current = await currentWebhook(creds);
   if (!current?.endpoint) throw new DomainError('LINE 尚未設定 Webhook 網址。');
   if (current.endpoint !== expected) throw new DomainError(`LINE 目前指向另一個服務網址（${endpointHost(current.endpoint)}）。請先確認原系統用途。`);
   if (!current.active) throw new DomainError('請到 LINE Developers 的 Messaging API 設定開啟 Use webhook。');
-  const result = await lineGateway().testWebhook(creds, expected);
-  if (!passed(result)) throw new DomainError('LINE 無法驗證本站 Webhook。請確認網址可公開接收 LINE 請求，並核對 Channel secret。');
+  await testSiteWebhook(creds, expected);
 }

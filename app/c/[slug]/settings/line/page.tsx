@@ -1,7 +1,7 @@
 import { requireCommunity } from '@/auth/session';
 import { configureOwnLineAction, initializeOwnWebhookAction, installOwnRichMenuAction, setLineModeAction } from '@/actions/community';
 import { getCommunityWithPlan } from '@/domain/communities';
-import { credsOf, getChannelQuota, getOwnChannel, getSharedChannel, lineAddFriendUrl, webhookUrlFor } from '@/domain/line-channels';
+import { channelQuotaSummary, getOwnChannel, getSharedChannel, lineAddFriendUrl, webhookUrlFor } from '@/domain/line-channels';
 import { LineSetupForm } from '@/components/line-setup';
 import { StateButton } from '@/components/state-button';
 import { Alert, Badge, Card, CardBody, CardHeader, PageHeader } from '@/components/ui';
@@ -14,7 +14,7 @@ export default async function LineSettings({ params }: { params: Promise<{ slug:
   const [{ plan }, own, shared] = await Promise.all([getCommunityWithPlan(ctx.community.id), getOwnChannel(ctx.community.id), getSharedChannel()]);
   const mode = ctx.community.lineMode;
   const active = mode === 'own' ? (own?.isActive ? own : null) : mode === 'shared' ? shared : null;
-  const quota = active ? await getChannelQuota({ channel: active, creds: credsOf(active) }) : null;
+  const quota = active ? await channelQuotaSummary(active) : null;
   const canOwn = plan.features.ownLine || ctx.role === 'platform_admin';
 
   return (
@@ -34,7 +34,7 @@ export default async function LineSettings({ params }: { params: Promise<{ slug:
               </a>
               {quota ? (
                 <span className="text-sm text-gray-500">
-                  本月訊息用量 {quota.used}/{quota.limit ?? '無上限'}
+                  本月訊息用量 {quota}
                 </span>
               ) : null}
             </div>

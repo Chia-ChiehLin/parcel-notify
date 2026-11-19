@@ -42,6 +42,8 @@
 5. 為兩個測試社區分別建立管理者及警衛。用櫃台平板跑收件、照相、一次／批次通知、單件取件碼、代領、簽名及查紀錄，比對住戶頁、未綁定戶紙本通知單，以及每個角色可見的社區。若出現傳送失敗，記錄重送與備援結果。以已驗證的測試信箱走一次邀請、忘記密碼和 Email 通知。
 6. 收費前由負責人將 Vercel 升級至 Pro，審定報價、LINE 配額與費用負擔，審閱隱私政策和條款，確認客服信箱與資料清理程序可用。記錄實際測試日期、部署、設備與結果。正式切換須先取得專案負責人同意，保留 v1 可回復的部署與資料備份。正式站確認產品頁、登入、健康、Webhook 與排程後才開通客戶。[Vercel Hobby 使用範圍](https://vercel.com/docs/plans/hobby)
 
+平台共用帳號與社區自有帳號使用同一張隨版圖文選單。圖片為本專案繪製的四個圖示，文字使用 Noto Sans TC 排版後輸出。更新美術時保留 2500 × 843 像素與四個等寬點選區，並確認 PNG 小於 1 MB。中文字型與圖示已包含在圖片中，建立選單時直接上傳給 LINE。[選單原圖](src/line/assets/rich-menu.png) · [Noto Sans TC 與授權資訊](https://github.com/google/fonts/tree/main/ofl/notosanstc) · [LINE 圖片上傳規格](https://developers.line.biz/en/reference/messaging-api/nojs/#upload-rich-menu-image)
+
 ## 開通、收款與退場
 
 | 情境 | 後台操作及核對 |

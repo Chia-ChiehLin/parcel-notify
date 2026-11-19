@@ -1,6 +1,6 @@
 import { requirePlatformAdmin } from '@/auth/session';
 import { configureSharedLineAction, initializeSharedWebhookAction, installSharedRichMenuAction, verifySharedWebhookAction } from '@/actions/platform';
-import { credsOf, getChannelQuota, getSavedSharedChannel, lineAddFriendUrl, webhookUrlFor } from '@/domain/line-channels';
+import { channelQuotaSummary, getSavedSharedChannel, lineAddFriendUrl, webhookUrlFor } from '@/domain/line-channels';
 import { LineSetupForm } from '@/components/line-setup';
 import { StateButton } from '@/components/state-button';
 import { Alert, Badge, Card, CardBody, CardHeader, PageHeader } from '@/components/ui';
@@ -12,7 +12,7 @@ export const dynamic = 'force-dynamic';
 export default async function SharedLinePage() {
   await requirePlatformAdmin();
   const channel = await getSavedSharedChannel();
-  const quota = channel ? await getChannelQuota({ channel, creds: credsOf(channel) }) : null;
+  const quota = channel ? await channelQuotaSummary(channel) : null;
   return (
     <>
       <PageHeader title="共用 LINE 官方帳號" description="選擇「共用帳號」的社區，住戶都會加入這個官方帳號。訊息費由這個帳號的 LINE 方案負擔，請反映在售價中。" />
@@ -37,7 +37,7 @@ export default async function SharedLinePage() {
               </div>
               <div>
                 <span className="text-gray-500">本月訊息用量：</span>
-                {quota ? `${quota.used} / ${quota.limit ?? '無上限'} 則` : '無法取得'}
+                {quota}
               </div>
             </div>
             <div className="space-y-2">
@@ -45,7 +45,7 @@ export default async function SharedLinePage() {
               <StateButton action={initializeSharedWebhookAction}>測試並設定本站 Webhook</StateButton>
               <StateButton action={verifySharedWebhookAction}>檢查 LINE Webhook 連線</StateButton>
               <div className="font-medium text-gray-700">圖文選單</div>
-              <p className="text-gray-500">{channel.richMenuId ? '已建立。重新建立會覆蓋目前的預設選單。' : '建立後，住戶聊天室下方會出現「我的包裹／取件 QR／通知設定／使用說明」按鈕。'}</p>
+              <p className="text-gray-500">{channel.richMenuId ? '已建立。重新建立前會先確認 LINE 目前的預設選單仍由本系統管理。' : '建立後，住戶聊天室下方會出現「我的包裹／取件 QR／通知設定／使用說明」按鈕。'}</p>
               {channel.isActive ? <StateButton action={installSharedRichMenuAction}>{channel.richMenuId ? '重新建立圖文選單' : '建立圖文選單'}</StateButton> : null}
             </div>
           </CardBody>
