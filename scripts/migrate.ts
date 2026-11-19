@@ -7,13 +7,10 @@ import path from 'node:path';
 import { Client } from 'pg';
 import { closeDb, db } from '../src/db';
 import { seedDefaults } from '../src/domain/seed';
-import { env } from '../src/lib/env';
+import { env, validateDeploymentSecrets } from '../src/lib/env';
 
 async function main() {
-  if (process.env.VERCEL_ENV === 'production' || process.env.VERCEL_ENV === 'preview') {
-    if ((process.env.APP_SECRET?.trim().length ?? 0) < 32) throw new Error('Vercel 部署需要至少 32 字元的 APP_SECRET');
-    if (process.env.VERCEL_ENV === 'production' && !process.env.CRON_SECRET?.trim()) throw new Error('正式環境需要設定 CRON_SECRET');
-  }
+  validateDeploymentSecrets();
   // Separate connection keeps the transaction lock across the migrator's own transactions, including on a pooled Neon URL.
   const lock = new Client({ connectionString: env().DATABASE_URL });
   await lock.connect();

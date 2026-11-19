@@ -1,5 +1,5 @@
 // This module is loaded only by the Playwright web server. Keep all test notifications local.
-import { mkdir, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, writeFile } from 'node:fs/promises';
 import { createHmac } from 'node:crypto';
 
 const fetchFromNetwork = globalThis.fetch;
@@ -33,7 +33,11 @@ globalThis.fetch = async (input, options) => {
     if (url.pathname === '/v2/bot/message/reply') return Response.json({});
     if (url.pathname === '/v2/bot/message/push') {
       const body = JSON.parse(options.body);
-      if (body.to === 'U-e2e-resident' && body.messages?.length === 1) return Response.json({});
+      if (body.to === 'U-e2e-resident' && body.messages?.length === 1) {
+        await mkdir('test-results', { recursive: true });
+        await appendFile('test-results/resident-push.jsonl', JSON.stringify(body.messages[0]) + '\n', { mode: 0o600 });
+        return Response.json({});
+      }
     }
   }
   if (url.href === 'https://api.resend.com/emails') {

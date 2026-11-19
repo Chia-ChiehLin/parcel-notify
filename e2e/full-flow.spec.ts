@@ -1,12 +1,8 @@
 import crypto from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-import { expect, test } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { Client } from 'pg';
-import { E2E_DATABASE_URL, E2E_LINE_SECRET, E2E_SECRET, E2E_SETUP_TOKEN } from '../playwright.config';
-
-// 用和伺服器相同的 APP_SECRET 產生加密金鑰、住戶連結
-process.env.APP_SECRET = E2E_SECRET;
-process.env.DATABASE_URL = E2E_DATABASE_URL;
+import { E2E_DATABASE_URL, E2E_LINE_SECRET, E2E_SETUP_TOKEN } from '../playwright.config';
 
 async function sql<T = Record<string, unknown>>(q: string, params: unknown[] = []): Promise<T[]> {
   const c = new Client({ connectionString: E2E_DATABASE_URL });
@@ -18,9 +14,46 @@ async function sql<T = Record<string, unknown>>(q: string, params: unknown[] = [
   }
 }
 
+// 從瀏覽器實際畫出的 QR 解碼，模擬掃描槍輸出。
+async function readQr(image: Locator) {
+  const png = await image.screenshot();
+  const page = image.page();
+  await page.addScriptTag({ path: 'node_modules/@zxing/browser/umd/zxing-browser.min.js' });
+  return page.evaluate(async (src) => {
+    const { BrowserQRCodeReader } = (window as typeof window & { ZXingBrowser: typeof import('@zxing/browser') }).ZXingBrowser;
+    return (await new BrowserQRCodeReader().decodeFromImageUrl(src)).getText();
+  }, 'data:image/png;base64,' + png.toString('base64'));
+}
+
+/** 把住戶手機上的實際畫面送進櫃台的相機元件，執行應用程式本身的掃描與解碼。 */
+async function simulateCameraFrame(desk: Page, qrImage: Buffer) {
+  await desk.evaluate(async (dataUrl) => {
+    const image = new Image();
+    image.src = dataUrl;
+    await image.decode();
+    navigator.mediaDevices.getUserMedia = async () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 640;
+      canvas.height = 480;
+      const context = canvas.getContext('2d')!;
+      const stream = canvas.captureStream(15);
+      const [track] = stream.getVideoTracks();
+      const draw = () => {
+        if (track.readyState === 'ended') return;
+        context.fillStyle = 'white';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(image, 160, 80, 320, 320);
+        window.setTimeout(draw, 70);
+      };
+      draw();
+      return stream;
+    };
+  }, 'data:image/png;base64,' + qrImage.toString('base64'));
+}
+
 test.describe.configure({ mode: 'serial' });
 
-test('平台開通社區 → 產生戶別 → LINE 綁定 → 收件 → 交付 → 住戶頁面', async ({ page, request }) => {
+test('平台開通社區 → 綁定卡 → 同戶合併通知 → 取件碼與住戶 QR 簽領', async ({ page, request, browser }) => {
   // 1. 建立平台管理員
   await page.goto('/setup');
   await page.getByLabel('設定碼').fill(E2E_SETUP_TOKEN);
@@ -71,7 +104,14 @@ test('平台開通社區 → 產生戶別 → LINE 綁定 → 收件 → 交付 
   await page.getByRole('button', { name: '測試並設定本站 Webhook' }).click();
   await expect.poll(async () => (await sql('select id from app.line_channels where is_active and verified_at is not null')).length).toBe(1);
   const [{ webhook_key: webhookKey }] = await sql<{ webhook_key: string }>('select webhook_key from app.line_channels where community_id is null');
-  const [unit] = await sql<{ id: string; bind_code: string }>(`select id, bind_code from app.units where label = 'A-14-1'`);
+  const [unit] = await sql<{ id: string }>(`select id from app.units where label = 'A-14-1'`);
+  await page.goto('/c/happy-garden/print/cards');
+  const card = page.locator('.print-page > div').filter({ has: page.getByText('A-14-1', { exact: true }) });
+  const bindUrl = new URL(await readQr(card.locator('svg')));
+  expect(bindUrl.origin).toBe('https://line.me');
+  expect(decodeURIComponent(bindUrl.pathname)).toBe('/R/oaMessage/@e2etest/');
+  const bindCode = decodeURIComponent(bindUrl.search.slice(1));
+  await expect(card.getByText(bindCode, { exact: true })).toBeVisible();
 
   // 4a. 簽章錯誤 → 401
   const bad = await request.post(`/api/line/webhook/${webhookKey}`, { data: '{"events":[]}', headers: { 'content-type': 'application/json', 'x-line-signature': 'bad' } });
@@ -89,7 +129,7 @@ test('平台開通社區 → 產生戶別 → LINE 綁定 → 收件 → 交付 
         deliveryContext: { isRedelivery: false },
         source: { type: 'user', userId: 'U-e2e-resident' },
         replyToken: 'reply-token',
-        message: { type: 'text', id: '1', text: unit.bind_code, quoteToken: 'q' },
+        message: { type: 'text', id: '1', text: bindCode, quoteToken: 'q' },
       },
     ],
   });
@@ -110,21 +150,27 @@ test('平台開通社區 → 產生戶別 → LINE 綁定 → 收件 → 交付 
   const flash = await page.getByText(/取件碼 \d{6}/).first().textContent();
   const pickupCode = flash!.match(/\d{6}/)![0];
 
-  // 完成並通知（測試伺服器攔截 LINE 請求並模擬成功）
-  await page.getByRole('button', { name: /完成並發送通知/ }).click();
-  await expect(page.getByRole('status').filter({ hasText: /已通知 1 筆/ })).toBeVisible();
-  const [parcel] = await sql<{ notify_status: string }>(`select notify_status from app.parcels where pickup_code = $1`, [pickupCode]);
-  expect(parcel.notify_status).toBe('sent');
-
-  // 同戶第二件仍在櫃台。單件取件碼只應交付對應的包裹。
+  // 同戶第二件和第一件一起通知，單件取件碼稍後只應交付對應的包裹。
   await page.getByLabel('搜尋戶號').fill('A141');
   await page.getByRole('button', { name: 'A-14-1' }).click();
   await page.getByRole('button', { name: /^登記 A-14-1/ }).click();
-  await expect(page.getByText('待通知', { exact: true })).toBeVisible();
-  const [otherParcel] = await sql<{ pickup_code: string }>(
-    `select pickup_code from app.parcels where unit_id = $1 and pickup_code <> $2`,
+  await expect(page.getByText('待通知', { exact: true })).toHaveCount(2);
+  const [otherParcel] = await sql<{ id: string; pickup_code: string }>(
+    `select id, pickup_code from app.parcels where unit_id = $1 and pickup_code <> $2`,
     [unit.id, pickupCode],
   );
+  await page.getByRole('button', { name: /完成並發送通知/ }).click();
+  await expect(page.getByRole('status').filter({ hasText: /已通知 2 筆/ })).toBeVisible();
+  expect(await sql(`select id from app.parcels where unit_id = $1 and notify_status = 'sent'`, [unit.id])).toHaveLength(2);
+  const pushes = (await readFile('test-results/resident-push.jsonl', 'utf8')).trim().split('\n');
+  expect(pushes).toHaveLength(1);
+  const notification = JSON.parse(pushes[0]);
+  expect(notification.type).toBe('flex');
+  expect(notification.altText).toContain(pickupCode);
+  expect(notification.altText).toContain(otherParcel.pickup_code);
+  const residentUrl = new URL(notification.contents.footer.contents[0].action.uri);
+  expect(residentUrl.origin).toBe(new URL(page.url()).origin);
+  expect(residentUrl.pathname).toMatch(/^\/r\//);
 
   // 6. 交付：輸入取件碼
   await page.goto('/c/happy-garden/pickup');
@@ -139,15 +185,52 @@ test('平台開通社區 → 產生戶別 → LINE 綁定 → 收件 → 交付 
   await page.goto('/c/happy-garden/parcels?status=picked_up');
   await expect(page.getByRole('link', { name: 'A-14-1' })).toBeVisible();
 
-  // 8. 住戶頁面（從 LINE 連結開啟）
-  const { residentToken } = await import('../src/domain/tokens');
-  const [resident] = await sql<{ id: string; token_version: number }>(`select id, token_version from app.residents where line_user_id = 'U-e2e-resident'`);
-  await page.goto(`/r/${residentToken({ id: resident.id, tokenVersion: resident.token_version })}`);
-  await expect(page.getByRole('heading', { name: 'A-14-1' })).toBeVisible();
-  await expect(page.getByText(otherParcel.pickup_code, { exact: true })).toBeVisible();
-  await expect(page.getByText('黑貓宅急便', { exact: true })).toBeVisible();
+  // 8. 住戶從實際產生的 Flex 訊息開啟手機頁，與管理室使用不同的瀏覽器 session。
+  const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  await phone.goto(residentUrl.href);
+  await expect(phone.getByRole('heading', { name: 'A-14-1' })).toBeVisible();
+  await expect(phone.getByText(otherParcel.pickup_code, { exact: true })).toBeVisible();
+  await expect(phone.getByText('黑貓宅急便', { exact: true })).toBeVisible();
+  const qrImage = await phone.getByRole('img', { name: '出示取件 QR code' }).screenshot();
 
-  await page.goto(page.url() + '/settings');
+  await page.goto('/c/happy-garden/settings');
+  const signatureSetting = page.getByLabel('交付時要求簽名');
+  await signatureSetting.check();
+  await page.locator('form').filter({ has: signatureSetting }).getByRole('button', { name: '儲存' }).click();
+  await expect(page.getByText('已儲存通知設定')).toBeVisible();
+  await page.goto('/c/happy-garden/pickup');
+  await simulateCameraFrame(page, qrImage);
+  await page.getByRole('button', { name: '開啟相機掃描取件 QR' }).click();
+  await expect(page.getByText('住戶 QR', { exact: true })).toBeVisible();
+  const confirm = page.getByRole('button', { name: '確認交付 1 件' });
+  await expect(confirm).toBeDisabled();
+  const pad = page.getByLabel('領取人簽名區');
+  await pad.scrollIntoViewIfNeeded();
+  const bounds = await pad.boundingBox();
+  if (!bounds) throw new Error('簽名區沒有顯示');
+  await page.mouse.move(bounds.x + 25, bounds.y + 70);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + 65, bounds.y + 35, { steps: 8 });
+  await page.mouse.move(bounds.x + 100, bounds.y + 75, { steps: 8 });
+  await page.mouse.up();
+  await expect(confirm).toBeEnabled();
+  await confirm.click();
+  await expect(page.getByText('A-14-1：已交付 1 件')).toBeVisible();
+  await page.goto('/c/happy-garden/parcels/' + otherParcel.id);
+  await expect(page.getByText('住戶 QR', { exact: true })).toBeVisible();
+  await expect(page.getByText('交付人員：服務商')).toBeVisible();
+  const receipt = page.getByRole('img', { name: '簽名', exact: true });
+  await expect(receipt).toBeVisible();
+  await expect.poll(() => receipt.evaluate((img) => (img as HTMLImageElement).naturalWidth)).toBeGreaterThan(0);
+  const receiptUrl = new URL((await receipt.getAttribute('src'))!, page.url());
+  expect((await phone.request.get(receiptUrl.href)).status()).toBe(401);
+  await phone.reload();
+  await expect(phone.getByText('目前沒有待領取的包裹')).toBeVisible();
+  await expect(phone.getByRole('img', { name: '出示取件 QR code' })).toHaveCount(0);
+  await expect(phone.getByRole('listitem')).toHaveCount(2);
+  await phone.close();
+
+  await page.goto(residentUrl.href + '/settings');
   await page.getByRole('checkbox', { name: '用 Email 通知我' }).check();
   await page.getByRole('textbox', { name: 'Email', exact: true }).fill('resident@example.test');
   await page.getByRole('button', { name: '儲存', exact: true }).click();

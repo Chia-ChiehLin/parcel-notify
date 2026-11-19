@@ -38,6 +38,18 @@ export function resetEnvCache() {
   cached = null;
 }
 
+export function isStaging(): boolean {
+  return process.env.PARCEL_ENV === 'staging';
+}
+
+/** 在連線及執行 migration 前檢查部署所需的金鑰。 */
+export function validateDeploymentSecrets() {
+  const target = process.env.VERCEL_ENV;
+  if (target !== 'production' && target !== 'preview') return;
+  if ((process.env.APP_SECRET?.trim().length ?? 0) < 32) throw new Error('Vercel 部署需要至少 32 字元的 APP_SECRET');
+  if (target === 'production' && !isStaging() && !process.env.CRON_SECRET?.trim()) throw new Error('正式環境需要設定 CRON_SECRET');
+}
+
 export function appUrl(): string {
   const e = env();
   if (e.APP_URL) return e.APP_URL.replace(/\/$/, '');
